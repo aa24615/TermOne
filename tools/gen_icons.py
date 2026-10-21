@@ -17,13 +17,19 @@ OUT = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  "..", "apps", "desktop", "src-tauri", "icons"))
 
-BG_TOP = (124, 106, 255)    # #7C6AFF
-BG_BOTTOM = (64, 44, 214)   # #402CD6
+BG_TOP = (139, 99, 255)     # #8B63FF
+BG_BOTTOM = (63, 35, 205)   # #3F23CD
 FG = (245, 246, 255)        # #F5F6FF
 
 FULL_BLEED_RADIUS = 112 / 512        # Windows/Linux 满幅圆角比例
 MAC_CONTENT_RATIO = 0.8              # macOS 内容占画布比例（Apple 规范约 80%）
 MAC_RADIUS = 0.2245                  # macOS 圆角 / 内容尺寸（Big Sur 模板 185/824）
+
+# “❯1” 标识：提示符箭头 + 数字 1（TermOne），512 基准坐标
+GLYPH_LW = 36
+CHEVRON = (110, 150, 230, 256, 110, 362)          # ❯
+ONE_STEM = (392, 148, 392, 364)                   # “1” 竖笔
+ONE_FLAG = (318, 212, 394, 144)                   # “1” 旗笔
 
 
 def clamp(v, lo, hi):
@@ -61,7 +67,10 @@ def render(size, content_ratio=1.0, radius_ratio=FULL_BLEED_RADIUS):
     off = (size - content) / 2.0
     s = content / BASE          # 512 基准设计坐标 → 画布坐标
     r = content * radius_ratio
-    lw = 34 * s
+    lw = GLYPH_LW * s
+    cx1, cy1, cx2, cy2, cx3, cy3 = (v * s for v in CHEVRON)
+    sx1, sy1, sx2, sy2 = (v * s for v in ONE_STEM)
+    fx1, fy1, fx2, fy2 = (v * s for v in ONE_FLAG)
     img = []
     for y in range(size):
         py = y + 0.5
@@ -76,13 +85,18 @@ def render(size, content_ratio=1.0, radius_ratio=FULL_BLEED_RADIUS):
             if a <= 0.0:
                 row.append((0, 0, 0, 0))
                 continue
+            # 对角高光带，增加立体感
+            band = clamp(1.0 - abs((lx - ly) - 0.16 * content) / (0.42 * content), 0.0, 1.0)
+            hi_a = 0.10 * band * band
+            col = tuple(bg[i] + (255 - bg[i]) * hi_a for i in range(3))
             dg = min(
-                seg_d(lx, ly, 122 * s, 148 * s, 238 * s, 256 * s),
-                seg_d(lx, ly, 238 * s, 256 * s, 122 * s, 364 * s),
-                seg_d(lx, ly, 272 * s, 368 * s, 392 * s, 368 * s),
+                seg_d(lx, ly, cx1, cy1, cx2, cy2),
+                seg_d(lx, ly, cx2, cy2, cx3, cy3),
+                seg_d(lx, ly, sx1, sy1, sx2, sy2),
+                seg_d(lx, ly, fx1, fy1, fx2, fy2),
             ) - lw / 2.0
             fg_a = clamp(0.5 - dg, 0.0, 1.0)
-            col = tuple(bg[i] + (FG[i] - bg[i]) * fg_a for i in range(3))
+            col = tuple(col[i] + (FG[i] - col[i]) * fg_a for i in range(3))
             row.append((int(col[0]), int(col[1]), int(col[2]), int(a * 255)))
         img.append(row)
     return img

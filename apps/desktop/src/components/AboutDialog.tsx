@@ -13,7 +13,7 @@ export function AboutDialog() {
     <Modal title="关于 TermOne" onClose={() => setDialog(null)} width={460}>
       <div className="about">
         <div className="about-hero">
-          <div className="about-logo">&gt;_</div>
+          <div className="about-logo">❯1</div>
           <div>
             <div className="about-name">
               TermOne{appInfo ? <span className="about-ver">v{appInfo.version}</span> : null}

@@ -6,7 +6,7 @@ export function WelcomePane() {
 
   return (
     <div className="welcome">
-      <div className="welcome-logo">&gt;_</div>
+      <div className="welcome-logo">❯1</div>
       <h1>TermOne</h1>
       <p>轻量、漂亮的跨平台终端</p>
       <div className="welcome-actions">

@@ -34,7 +34,7 @@ export function TitleBar() {
   return (
     <header className={`titlebar${isMac ? " mac" : ""}`}>
       <div className="titlebar-brand" data-tauri-drag-region>
-        <span className="logo">&gt;_</span>
+        <span className="logo">❯1</span>
         <span className="app-name">TermOne</span>
       </div>
       <div className="titlebar-title" data-tauri-drag-region>
