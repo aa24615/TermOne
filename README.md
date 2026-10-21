@@ -68,18 +68,20 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 
 ## 发版与打包（CNB 流水线）
 
-**发版完全由按钮触发**：打开仓库 `main` 分支详情页 → 点击「发版 Release」按钮 →
+**客户端发版由按钮触发**：打开仓库 `main` 分支详情页 → 点击「发版 Release（客户端）」按钮 →
 输入版本号（如 `0.1.0`）确认即可。流水线会自动：
 
 1. 创建并推送 `v0.1.0` 标签
-2. 构建并推送 Docker 镜像 `…/termone-server:v0.1.0`（及 `latest`）
-3. Windows / macOS 自托管节点打包并上传 Release 附件（Release 自动创建）
+2. Windows / macOS 自托管节点打包并上传 Release 附件（Release 自动创建）
 
-| 流水线 | 运行节点 | 产物 |
+服务端镜像独立发布：点击「发布服务端镜像」按钮输入版本号，与客户端发版互不影响。
+
+| 按钮 / 流水线 | 运行节点 | 产物 |
 | --- | --- | --- |
-| `server-image` | 云端 Linux | `v*` 标签 + Docker 镜像（版本 tag 与 `latest`） |
-| `desktop-windows` | 自托管 Windows（tags: `windows, x64`） | NSIS `.exe` / `.msi` → Release 附件 |
-| `desktop-macos` | 自托管 macOS（tags: `macos, arm64`） | `.dmg` → Release 附件 |
+| 发版 Release（客户端）→ `create-tag` | 云端 Linux | `v*` 标签 |
+| 发版 Release（客户端）→ `desktop-windows` | 自托管 Windows（tags: `windows, x64`） | NSIS `.exe` / `.msi` → Release 附件 |
+| 发版 Release（客户端）→ `desktop-macos` | 自托管 macOS（tags: `macos, arm64`） | `.dmg` → Release 附件 |
+| 发布服务端镜像 → `server-image` | 云端 Linux | Docker 镜像 `v*` + `latest` |
 | `check` / main push | 云端 Linux | 类型检查 + 前端构建 |
 
 桌面端两条流水线依赖根组织自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）：
