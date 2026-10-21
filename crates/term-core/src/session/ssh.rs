@@ -10,6 +10,21 @@ use super::local::spawn_pty;
 use super::{ExitSink, OutputSink, SessionId, SessionKind, Spawned, SshAuth};
 use crate::error::Result;
 
+/// 展开 `~` / `~/` 开头的路径为绝对路径（-i 参数不经过 shell，无自动展开）。
+fn expand_tilde(path: &str) -> String {
+    if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home.to_string_lossy().into_owned();
+        }
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn(
     id: SessionId,
@@ -34,7 +49,8 @@ pub(crate) fn spawn(
     if let SshAuth::Key { identity_file } = &auth {
         if !identity_file.is_empty() {
             argv.push("-i".into());
-            argv.push(identity_file.clone());
+            // 手动输入的 ~ 路径没有 shell 展开，这里补齐
+            argv.push(expand_tilde(identity_file));
             argv.push("-o".into());
             argv.push("IdentitiesOnly=yes".into());
         }

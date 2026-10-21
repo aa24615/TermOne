@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { ipc } from "../ipc";
 import { defaultConfig, defaultProfileName } from "../profile";
@@ -46,6 +47,23 @@ export function ProfileDialog({ profileId }: Props) {
 
   const patch = (partial: Record<string, unknown>) =>
     setConfig((c) => ({ ...c, ...partial }));
+
+  const pickIdentityFile = async (): Promise<void> => {
+    try {
+      const path = await open({
+        title: "选择 SSH 私钥",
+        multiple: false,
+        filters: [
+          { name: "全部文件", extensions: ["*"] },
+          { name: "密钥文件", extensions: ["pem", "key"] },
+        ],
+      });
+      if (!path || Array.isArray(path)) return;
+      patch({ identityFile: path });
+    } catch {
+      // 用户取消或对话框异常，忽略
+    }
+  };
 
   const switchKind = (next: ProfileKind) => {
     setKind(next);
@@ -158,12 +176,17 @@ export function ProfileDialog({ profileId }: Props) {
             {config.auth === "key" && (
               <>
                 <label>私钥路径</label>
-                <input
-                  value={(config.identityFile as string) ?? ""}
-                  onChange={(e) => patch({ identityFile: e.target.value })}
-                  placeholder="~/.ssh/id_ed25519"
-                  spellCheck={false}
-                />
+                <div className="input-row">
+                  <input
+                    value={(config.identityFile as string) ?? ""}
+                    onChange={(e) => patch({ identityFile: e.target.value })}
+                    placeholder="~/.ssh/id_ed25519"
+                    spellCheck={false}
+                  />
+                  <button className="btn" onClick={() => void pickIdentityFile()}>
+                    选择…
+                  </button>
+                </div>
               </>
             )}
             <span className="form-span" />
