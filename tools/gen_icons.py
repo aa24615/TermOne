@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """生成 TermOne 应用图标（PNG / ICO / ICNS），仅依赖 Python 标准库。
 
+- Windows / Linux (PNG、ICO)：满幅设计
+- macOS (ICNS)：按 Apple 规范留白，内容约占画布 80%，圆角比例 0.2245
+
 用法: python3 tools/gen_icons.py
 输出目录: apps/desktop/src-tauri/icons/
 """
@@ -18,13 +21,17 @@ BG_TOP = (124, 106, 255)    # #7C6AFF
 BG_BOTTOM = (64, 44, 214)   # #402CD6
 FG = (245, 246, 255)        # #F5F6FF
 
+FULL_BLEED_RADIUS = 112 / 512        # Windows/Linux 满幅圆角比例
+MAC_CONTENT_RATIO = 0.8              # macOS 内容占画布比例（Apple 规范约 80%）
+MAC_RADIUS = 0.2245                  # macOS 圆角 / 内容尺寸（Big Sur 模板 185/824）
+
 
 def clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
 def rr_sdf(x, y, size, r):
-    """点到圆角矩形的带符号距离（内部为负）。"""
+    """点到 [0,size]^2 圆角矩形的带符号距离（内部为负）。"""
     hx = size / 2.0
     hy = size / 2.0
     qx = abs(x - hx) - (hx - r)
@@ -45,27 +52,34 @@ def seg_d(x, y, x1, y1, x2, y2):
     return math.hypot(wx - t * vx, wy - t * vy)
 
 
-def render(size):
-    """绘制 512 基准图标：圆角方块 + 渐变 + “>_” 符号，SDF 抗锯齿。"""
-    s = size / BASE
-    r = 112 * s
+def render(size, content_ratio=1.0, radius_ratio=FULL_BLEED_RADIUS):
+    """绘制图标：圆角方块 + 渐变 + “>_” 符号，SDF 抗锯齿。
+
+    content_ratio < 1 时内容居中缩小（macOS 留白规范）。
+    """
+    content = size * content_ratio
+    off = (size - content) / 2.0
+    s = content / BASE          # 512 基准设计坐标 → 画布坐标
+    r = content * radius_ratio
     lw = 34 * s
     img = []
     for y in range(size):
         py = y + 0.5
-        g = clamp(py / size, 0.0, 1.0)
+        ly = py - off
+        g = clamp(ly / content, 0.0, 1.0)
         bg = tuple(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * g for i in range(3))
         row = []
         for x in range(size):
             px = x + 0.5
-            a = clamp(0.5 - rr_sdf(px, py, size, r), 0.0, 1.0)
+            lx = px - off
+            a = clamp(0.5 - rr_sdf(lx, ly, content, r), 0.0, 1.0)
             if a <= 0.0:
                 row.append((0, 0, 0, 0))
                 continue
             dg = min(
-                seg_d(px, py, 122 * s, 148 * s, 238 * s, 256 * s),
-                seg_d(px, py, 238 * s, 256 * s, 122 * s, 364 * s),
-                seg_d(px, py, 272 * s, 368 * s, 392 * s, 368 * s),
+                seg_d(lx, ly, 122 * s, 148 * s, 238 * s, 256 * s),
+                seg_d(lx, ly, 238 * s, 256 * s, 122 * s, 364 * s),
+                seg_d(lx, ly, 272 * s, 368 * s, 392 * s, 368 * s),
             ) - lw / 2.0
             fg_a = clamp(0.5 - dg, 0.0, 1.0)
             col = tuple(bg[i] + (FG[i] - bg[i]) * fg_a for i in range(3))
@@ -138,7 +152,7 @@ def write_icns(path, entries):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    print("rendering %dpx icon ..." % BASE)
+    print("rendering %dpx icon (full bleed for win/linux) ..." % BASE)
     base = render(BASE)
     sizes = {
         512: base,
@@ -162,12 +176,14 @@ def main():
     ])
     print("wrote", ico_path)
 
+    print("rendering macOS icons (content %.0f%%, Apple guidelines) ..."
+          % (MAC_CONTENT_RATIO * 100))
+    icns_entries = []
+    for tag, sz in (("ic07", 128), ("ic08", 256), ("ic09", 512)):
+        img = render(sz, MAC_CONTENT_RATIO, MAC_RADIUS)
+        icns_entries.append((tag, png_bytes(img)))
     icns_path = os.path.join(OUT, "icon.icns")
-    write_icns(icns_path, [
-        ("ic07", png_bytes(sizes[128])),
-        ("ic08", png_bytes(sizes[256])),
-        ("ic09", png_bytes(sizes[512])),
-    ])
+    write_icns(icns_path, icns_entries)
     print("wrote", icns_path)
 
 
