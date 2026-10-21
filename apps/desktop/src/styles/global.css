@@ -1003,6 +1003,132 @@ input[type="checkbox"] {
   color: #93a1a1;
 }
 
+/* ============ 关于 ============ */
+
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.about-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.about-logo {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #7c6aff, #402cd6);
+  color: #f5f6ff;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -1px;
+  user-select: none;
+}
+
+.about-name {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.about-ver {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+
+.about-desc {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin-top: 3px;
+}
+
+.about-links {
+  display: flex;
+  gap: 8px;
+}
+
+.about-changelog {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  padding: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.about-changelog .section-title {
+  display: block;
+  margin: 0 0 8px;
+}
+
+.cl-entry + .cl-entry {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.cl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cl-version {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.cl-current {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ok);
+  border: 1px solid var(--ok);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+
+.cl-date {
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin-left: auto;
+}
+
+.cl-items {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cl-items li {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.55;
+}
+
+.about-foot {
+  margin: 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
 /* ============ Toast ============ */
 
 .toasts {

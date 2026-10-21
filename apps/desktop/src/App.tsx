@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { AboutDialog } from "./components/AboutDialog";
 import { AccountDialog } from "./components/AccountDialog";
 import { Modal } from "./components/Dialog";
 import { ProfileDialog } from "./components/ProfileDialog";
@@ -126,6 +127,7 @@ export default function App() {
       {dialog?.type === "profile" && <ProfileDialog profileId={dialog.profileId} />}
       {dialog?.type === "settings" && <SettingsDialog />}
       {dialog?.type === "account" && <AccountDialog />}
+      {dialog?.type === "about" && <AboutDialog />}
 
       {confirmExit && (
         <Modal title="退出 TermOne" onClose={() => setConfirmExit(false)} width={380}>

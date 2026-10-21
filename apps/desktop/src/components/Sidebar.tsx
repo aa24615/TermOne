@@ -7,6 +7,7 @@ import {
   IconEdit,
   IconGear,
   IconGlobe,
+  IconInfo,
   IconPlus,
   IconSync,
   IconTerminal,
@@ -103,6 +104,9 @@ export function Sidebar() {
       <div className="sidebar-footer">
         <button className="side-btn" onClick={() => setDialog({ type: "settings" })}>
           <IconGear size={14} /> 设置
+        </button>
+        <button className="side-btn" onClick={() => setDialog({ type: "about" })}>
+          <IconInfo size={14} /> 关于
         </button>
       </div>
     </aside>

@@ -2,6 +2,8 @@
 
 轻量、漂亮的跨平台终端软件（Windows / macOS），参考 Tabby、WindTerm 设计。
 
+> GitHub：https://github.com/aa24615/TermOne
+
 - **本地终端**：PowerShell / pwsh / zsh / bash，多标签页
 - **SSH 远程**：基于系统 OpenSSH，密钥 / Agent / 密码认证，known_hosts 与系统一致
 - **串口 Serial**：USB-TTL 调试（波特率 / 数据位 / 校验 / 流控可配）

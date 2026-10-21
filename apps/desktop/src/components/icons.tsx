@@ -109,3 +109,10 @@ export const IconRefresh = ({ size, className }: IconProps) => (
     <path d="M21 12a9 9 0 1 1-2.6-6.3M21 3v5h-5" />
   </svg>
 );
+
+export const IconInfo = ({ size, className }: IconProps) => (
+  <svg {...base(size, className)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 7.5v.5" />
+  </svg>
+);

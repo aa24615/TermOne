@@ -38,6 +38,7 @@ export type DialogState =
   | { type: "profile"; profileId?: string }
   | { type: "settings" }
   | { type: "account" }
+  | { type: "about" }
   | null;
 
 interface TermStore {
