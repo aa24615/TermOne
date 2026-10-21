@@ -404,6 +404,24 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.tab-index {
+  flex: none;
+  min-width: 15px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--fg-faint);
+  background: var(--bg-input);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+.tab.active .tab-index {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .tab-close {
   width: 18px;
   height: 18px;

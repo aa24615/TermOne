@@ -10,6 +10,13 @@ export function TabBar() {
   const closeTab = useStore((s) => s.closeTab);
   const openTerminal = useStore((s) => s.openTerminal);
 
+  // 会话序号：欢迎页不计数，其余按位置从 1 编号
+  const tabNumbers = new Map<string, number>();
+  let seq = 0;
+  for (const t of tabs) {
+    if (t.kind !== "welcome") tabNumbers.set(t.id, ++seq);
+  }
+
   return (
     <div className="tabbar">
       <div className="tabs">
@@ -30,6 +37,9 @@ export function TabBar() {
               className={`tab-dot dot-${t.kind}`}
               style={color ? { background: color } : undefined}
             />
+            {tabNumbers.has(t.id) && (
+              <span className="tab-index">{tabNumbers.get(t.id)}</span>
+            )}
             <span className="tab-title">{t.title}</span>
             <button
               className="tab-close"
