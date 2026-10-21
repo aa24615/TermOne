@@ -4,6 +4,7 @@ import { ipc } from "../ipc";
 import { useStore } from "../store";
 import { THEME_NAMES } from "../types";
 import { Modal } from "./Dialog";
+import { Dropdown } from "./Dropdown";
 
 const DEFAULT_FS = 14;
 const DEFAULT_SB = 5000;
@@ -112,17 +113,15 @@ export function SettingsDialog() {
         />
 
         <label>默认档案</label>
-        <select
+        <Dropdown
           value={settings.defaultProfileId ?? ""}
-          onChange={(e) => void saveSetting("defaultProfileId", e.target.value || null)}
-        >
-          <option value="">系统默认 Shell</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}（{p.kind}）
-            </option>
-          ))}
-        </select>
+          placeholder="系统默认 Shell"
+          options={profiles.map((p) => ({
+            value: p.id,
+            label: `${p.name}（${p.kind}）`,
+          }))}
+          onChange={(v) => void saveSetting("defaultProfileId", v || null)}
+        />
 
         <span className="form-span section-title">备份与恢复</span>
 

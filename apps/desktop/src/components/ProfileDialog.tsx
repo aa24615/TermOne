@@ -4,6 +4,7 @@ import { ipc } from "../ipc";
 import { defaultConfig, defaultProfileName } from "../profile";
 import { useStore } from "../store";
 import type { ProfileKind, ProfileRow, SerialPortDto } from "../types";
+import { Dropdown } from "./Dropdown";
 import { Modal } from "./Dialog";
 import { IconRefresh } from "./icons";
 
@@ -76,11 +77,15 @@ export function ProfileDialog({ profileId }: Props) {
     <Modal title={existing ? "编辑档案" : "新建档案"} onClose={() => setDialog(null)}>
       <div className="form-grid">
         <label>类型</label>
-        <select value={kind} onChange={(e) => switchKind(e.target.value as ProfileKind)}>
-          <option value="local">本地 Shell</option>
-          <option value="ssh">SSH 远程</option>
-          <option value="serial">串口 Serial</option>
-        </select>
+        <Dropdown
+          value={kind}
+          options={[
+            { value: "local", label: "本地 Shell" },
+            { value: "ssh", label: "SSH 远程" },
+            { value: "serial", label: "串口 Serial" },
+          ]}
+          onChange={(v) => switchKind(v as ProfileKind)}
+        />
 
         <label>名称</label>
         <input
@@ -141,14 +146,15 @@ export function ProfileDialog({ profileId }: Props) {
               spellCheck={false}
             />
             <label>认证方式</label>
-            <select
+            <Dropdown
               value={(config.auth as string) ?? "password"}
-              onChange={(e) => patch({ auth: e.target.value })}
-            >
-              <option value="agent">默认（密钥 / Agent）</option>
-              <option value="password">密码（连接时在终端输入）</option>
-              <option value="key">指定密钥文件</option>
-            </select>
+              options={[
+                { value: "agent", label: "默认（密钥 / Agent）" },
+                { value: "password", label: "密码（连接时在终端输入）" },
+                { value: "key", label: "指定密钥文件" },
+              ]}
+              onChange={(v) => patch({ auth: v })}
+            />
             {config.auth === "key" && (
               <>
                 <label>私钥路径</label>
@@ -178,18 +184,17 @@ export function ProfileDialog({ profileId }: Props) {
                 placeholder="COM3 或 /dev/ttyUSB0"
                 spellCheck={false}
               />
-              <select
-                value=""
-                onChange={(e) => e.target.value && patch({ path: e.target.value })}
-              >
-                <option value="">选择设备…</option>
-                {serialPorts.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
-                    {p.product ? `（${p.product}）` : ""}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                className="flex-1"
+                value={serialPorts.some((p) => p.name === config.path) ? (config.path as string) : ""}
+                placeholder="选择设备…"
+                options={serialPorts.map((p) => ({
+                  value: p.name,
+                  label: p.name,
+                  description: p.product,
+                }))}
+                onChange={(v) => patch({ path: v })}
+              />
               <button
                 className="icon-btn"
                 title="刷新设备列表"
@@ -200,17 +205,13 @@ export function ProfileDialog({ profileId }: Props) {
             </div>
             <label>波特率</label>
             <div className="input-row">
-              <select
+              <Dropdown
+                className="flex-1"
                 value={BAUD_RATES.includes(config.baud as number) ? String(config.baud) : ""}
-                onChange={(e) => e.target.value && patch({ baud: Number(e.target.value) })}
-              >
-                <option value="">自定义…</option>
-                {BAUD_RATES.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
+                placeholder="自定义…"
+                options={BAUD_RATES.map((b) => ({ value: String(b), label: String(b) }))}
+                onChange={(v) => patch({ baud: Number(v) })}
+              />
               <input
                 type="number"
                 min={300}
@@ -220,39 +221,43 @@ export function ProfileDialog({ profileId }: Props) {
               />
             </div>
             <label>数据位</label>
-            <select
+            <Dropdown
               value={String(config.dataBits ?? 8)}
-              onChange={(e) => patch({ dataBits: Number(e.target.value) })}
-            >
-              <option value="8">8</option>
-              <option value="7">7</option>
-            </select>
+              options={[
+                { value: "8", label: "8" },
+                { value: "7", label: "7" },
+              ]}
+              onChange={(v) => patch({ dataBits: Number(v) })}
+            />
             <label>校验位</label>
-            <select
+            <Dropdown
               value={(config.parity as string) ?? "none"}
-              onChange={(e) => patch({ parity: e.target.value })}
-            >
-              <option value="none">无 None</option>
-              <option value="even">偶 Even</option>
-              <option value="odd">奇 Odd</option>
-            </select>
+              options={[
+                { value: "none", label: "无 None" },
+                { value: "even", label: "偶 Even" },
+                { value: "odd", label: "奇 Odd" },
+              ]}
+              onChange={(v) => patch({ parity: v })}
+            />
             <label>停止位</label>
-            <select
+            <Dropdown
               value={String(config.stopBits ?? 1)}
-              onChange={(e) => patch({ stopBits: Number(e.target.value) })}
-            >
-              <option value="1">1</option>
-              <option value="2">2</option>
-            </select>
+              options={[
+                { value: "1", label: "1" },
+                { value: "2", label: "2" },
+              ]}
+              onChange={(v) => patch({ stopBits: Number(v) })}
+            />
             <label>流控</label>
-            <select
+            <Dropdown
               value={(config.flowControl as string) ?? "none"}
-              onChange={(e) => patch({ flowControl: e.target.value })}
-            >
-              <option value="none">无</option>
-              <option value="xon">XON/XOFF</option>
-              <option value="rtscts">RTS/CTS</option>
-            </select>
+              options={[
+                { value: "none", label: "无" },
+                { value: "xon", label: "XON/XOFF" },
+                { value: "rtscts", label: "RTS/CTS" },
+              ]}
+              onChange={(v) => patch({ flowControl: v })}
+            />
           </>
         )}
 

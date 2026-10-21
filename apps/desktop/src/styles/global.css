@@ -686,8 +686,7 @@ input[type="text"],
 input[type="email"],
 input[type="password"],
 input[type="number"],
-input:not([type]),
-select {
+input:not([type]) {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -698,8 +697,7 @@ select {
   min-width: 0;
 }
 
-input:focus,
-select:focus {
+input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
@@ -709,6 +707,143 @@ input[type="checkbox"] {
   height: 16px;
   accent-color: var(--accent);
   justify-self: start;
+}
+
+/* ============ 自定义下拉框 ============ */
+
+.dropdown {
+  position: relative;
+  min-width: 0;
+}
+
+.form-grid > .dropdown {
+  width: 100%;
+}
+
+.input-row .dropdown {
+  flex: 1;
+  min-width: 0;
+}
+
+.dropdown-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease;
+}
+
+.dropdown-btn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.dropdown-btn.open,
+.dropdown-btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  outline: none;
+}
+
+.dropdown-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dropdown-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-value.placeholder {
+  color: var(--fg-faint);
+}
+
+.dropdown-caret {
+  flex: none;
+  color: var(--fg-dim);
+  transition: transform 0.15s ease;
+}
+
+.dropdown-caret.open {
+  transform: rotate(180deg);
+}
+
+.dropdown-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  max-height: 264px;
+  overflow-y: auto;
+  animation: dropdown-in 0.12s ease;
+}
+
+@keyframes dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dropdown-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.dropdown-option:hover,
+.dropdown-option.active {
+  background: var(--bg-hover);
+}
+
+.dropdown-option.selected {
+  color: var(--accent);
+}
+
+.dropdown-option .opt-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-option .opt-desc {
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.dropdown-option .opt-check {
+  flex: none;
 }
 
 /* ============ 对话框 ============ */
