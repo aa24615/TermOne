@@ -11,7 +11,7 @@ pub struct ShellInfo {
     pub preset: String,
 }
 
-fn find_in_dirs(name: &str, dirs: &[&std::path::Path]) -> Option<String> {
+fn find_in_dirs(name: &str, dirs: &[impl AsRef<std::path::Path>]) -> Option<String> {
     let exts: &[&str] = if cfg!(windows) { &["exe"] } else { &[""] };
     for dir in dirs {
         for ext in exts {
@@ -20,7 +20,7 @@ fn find_in_dirs(name: &str, dirs: &[&std::path::Path]) -> Option<String> {
             } else {
                 format!("{name}.{ext}")
             };
-            let p = dir.join(file);
+            let p = dir.as_ref().join(file);
             if p.is_file() {
                 return Some(p.to_string_lossy().into_owned());
             }
@@ -64,10 +64,10 @@ pub fn list_shells() -> Vec<ShellInfo> {
 
     #[cfg(windows)]
     {
-        const PS7: &[&std::path::Path] = &[std::path::Path::new(
+        let ps7: &[&std::path::Path] = &[std::path::Path::new(
             r"C:\Program Files\PowerShell\7",
         )];
-        if let Some(p) = find_in_dirs("pwsh", PS7).or_else(|| find_in_path("pwsh")) {
+        if let Some(p) = find_in_dirs("pwsh", ps7).or_else(|| find_in_path("pwsh")) {
             push_shell(&mut out, "PowerShell 7", p, "shell");
         }
         if let Some(p) = find_in_path("powershell") {
@@ -76,11 +76,11 @@ pub fn list_shells() -> Vec<ShellInfo> {
         if let Some(p) = find_in_path("cmd") {
             push_shell(&mut out, "CMD", p, "shell");
         }
-        const GIT: &[&std::path::Path] = &[
+        let git: &[&std::path::Path] = &[
             std::path::Path::new(r"C:\Program Files\Git\bin"),
             std::path::Path::new(r"C:\Program Files\Git\usr\bin"),
         ];
-        if let Some(p) = find_in_dirs("bash", GIT).or_else(|| find_in_path("bash")) {
+        if let Some(p) = find_in_dirs("bash", git).or_else(|| find_in_path("bash")) {
             push_shell(&mut out, "Git Bash", p, "shell");
         }
         if let Some(p) = find_in_path("nu") {
@@ -93,7 +93,7 @@ pub fn list_shells() -> Vec<ShellInfo> {
 
     #[cfg(not(windows))]
     {
-        const DIRS: &[&std::path::Path] = &[
+        let dirs: &[&std::path::Path] = &[
             std::path::Path::new("/bin"),
             std::path::Path::new("/usr/bin"),
             std::path::Path::new("/usr/local/bin"),
@@ -110,7 +110,7 @@ pub fn list_shells() -> Vec<ShellInfo> {
             ("pwsh", "PowerShell"),
             ("nu", "Nushell"),
         ] {
-            if let Some(p) = find_in_dirs(name, DIRS).or_else(|| find_in_path(name)) {
+            if let Some(p) = find_in_dirs(name, dirs).or_else(|| find_in_path(name)) {
                 push_shell(&mut out, label, p, "shell");
             }
         }

@@ -8,7 +8,7 @@ description = "TermOne 核心库：本地 PTY / SSH / 串口会话、SQLite 存�
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 log = { workspace = true }
 portable-pty = "0.8"
