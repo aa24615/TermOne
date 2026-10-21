@@ -1,0 +1,97 @@
+# TermOne CI 流水线
+#
+# 1) main push    : 类型检查 + 前端构建（云端 Linux 节点）
+#                   + 服务端 Docker 镜像构建并推送制品库（latest / main）
+# 2) tag v* 推送  : 服务端镜像（版本 tag + latest）+ 创建 Release
+#                   + Windows / macOS 桌面端安装包构建并上传 Release 附件
+#
+# 桌面端两条流水线依赖根组织下的自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）:
+#   - 接入方式见 https://docs.cnb.cool/zh/build/build-node.md 「根组织自定义 Runner」
+#   - Windows 节点标签需含 windows、x64；macOS 节点需含 macos（Apple Silicon 加 arm64）
+#   - 构建机需预装 Node.js >= 20 与 Rust 工具链（含平台依赖: MSVC / Xcode CLT）
+#   - 自托管节点无 Docker，脚本直接运行在宿主机（Windows 默认 PowerShell）
+
+main:
+  push:
+    - name: check
+      docker:
+        image: node:24
+      stages:
+        - name: install
+          script: npm ci --no-audit --no-fund
+        - name: typecheck & frontend build
+          script: |
+            npm run check
+            npm run build:desktop
+
+    - name: server-image
+      services:
+        - docker
+      stages:
+        - name: build image
+          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main apps/server
+        - name: push image
+          script: |
+            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main
+            docker tag ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
+            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
+
+"v*":
+  tag_push:
+    - name: server-image
+      services:
+        - docker
+      stages:
+        - name: build image
+          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH} apps/server
+        - name: push image
+          script: |
+            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH}
+            docker tag ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH} ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
+            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
+        - name: create release
+          type: git:release
+          options:
+            title: TermOne ${CNB_BRANCH}
+            description: |
+              TermOne ${CNB_BRANCH} 发布。
+
+              ## 下载
+              - Windows: 安装包 (.exe / .msi)
+              - macOS: 镜像 (.dmg)
+
+              ## 服务端镜像
+              docker.cnb.cool/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH}
+            latest: true
+
+    - name: desktop-windows
+      runner:
+        namespace: group
+        tags: [windows, x64]
+      stages:
+        - name: toolchain check
+          script: |
+            node -v
+            cargo --version
+        - name: install deps
+          script: npm ci --no-audit --no-fund
+        - name: build bundles
+          script: npm run tauri build
+        - name: upload to release
+          script: node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
+
+    - name: desktop-macos
+      runner:
+        namespace: group
+        tags: [macos, arm64]
+      stages:
+        - name: toolchain check
+          script: |
+            node -v
+            cargo --version
+        - name: install deps
+          script: npm ci --no-audit --no-fund
+        - name: build bundles
+          script: npm run tauri build
+        - name: upload to release
+          script: node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle

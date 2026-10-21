@@ -1,0 +1,16 @@
+services:
+  termone-server:
+    build: ./apps/server
+    # 已推送到 CNB 制品库时可直接用镜像（替换为你的仓库路径）:
+    # image: docker.cnb.cool/zyan2026/sshz/termone-server:latest
+    container_name: termone-server
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      TERMONE_DATA: /data
+    volumes:
+      - termone-data:/data
+
+volumes:
+  termone-data:

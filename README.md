@@ -32,7 +32,7 @@
 └── tools/gen_icons.py    # 图标生成脚本（纯标准库）
 ```
 
-## 快速开始
+## 快速开始（桌面端）
 
 依赖：Node.js ≥ 23.4（服务端使用内置 `node:sqlite`）、Rust ≥ 1.77；Windows 需 MSVC 工具链与 WebView2，macOS 需 Xcode Command Line Tools。
 
@@ -48,19 +48,44 @@ npm run tauri dev
 npm run tauri build
 ```
 
-启动同步服务端（可选，用于账号与云同步）：
+## 服务端 Docker 部署
 
 ```bash
-# 开发
-npm run dev:server           # 默认 http://0.0.0.0:8787
+# 本地构建并启动（推荐，数据持久化在 named volume /data）
+docker compose up -d --build
 
-# 生产
-PORT=8787 HOST=0.0.0.0 npm start --workspace @termone/server
+# 或手动构建运行
+docker build -t termone-server apps/server
+docker run -d -p 8787:8787 -v termone-data:/data termone-server
+
+# 使用 CI 推送到制品库的镜像（替换仓库路径）
+docker run -d -p 8787:8787 -v termone-data:/data \
+  docker.cnb.cool/zyan2026/sshz/termone-server:latest
 ```
 
-- 数据目录：`TERMONE_DATA`（默认 `./data`），含 `termone-server.db` 与自动生成的 `jwt.secret`
-- JWT 密钥首次启动自动生成，重启后令牌仍然有效；生产环境建议置于反向代理 + HTTPS 之后
-- 桌面端「设置 → 服务器地址」填入服务端地址（默认 `http://127.0.0.1:8787`），注册 / 登录后自动双向同步
+- 数据目录：容器内 `/data`（`TERMONE_DATA` 可改），含 `termone-server.db` 与自动生成的 `jwt.secret`
+- 生产环境建议置于反向代理 + HTTPS 之后
+
+## 发版与打包（CNB 流水线）
+
+打 `v*` 标签推送即自动发版：
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+| 流水线 | 运行节点 | 产物 |
+| --- | --- | --- |
+| `server-image` | 云端 Linux | Docker 镜像 `…/termone-server:<tag>` + `latest` 推送制品库，并创建 Release |
+| `desktop-windows` | 自托管 Windows（tags: `windows, x64`） | NSIS `.exe` / `.msi` → 上传 Release 附件 |
+| `desktop-macos` | 自托管 macOS（tags: `macos, arm64`） | `.dmg` → 上传 Release 附件 |
+| `check` / main push | 云端 Linux | 类型检查 + 前端构建 + `main`/`latest` 镜像 |
+
+桌面端两条流水线依赖根组织自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）：
+按 [构建节点文档](https://docs.cnb.cool/zh/build/build-node.md) 接入后，节点需预装
+Node.js ≥ 20 与 Rust 工具链（Windows 含 MSVC、macOS 含 Xcode CLT）。安装包通过
+OpenAPI 三步协议（申请预签名 URL → PUT → 确认）直传 Release，脚本见
+`scripts/upload-release-assets.mjs`。
 
 ## 检查与测试
 
