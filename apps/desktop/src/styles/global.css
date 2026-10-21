@@ -521,6 +521,13 @@ textarea {
   color: var(--fg-faint);
 }
 
+.welcome-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+  opacity: 0.8;
+}
+
 kbd {
   background: var(--bg-input);
   border: 1px solid var(--border);

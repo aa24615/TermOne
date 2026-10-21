@@ -30,19 +30,43 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
       const s = useStore.getState();
+      const mod = e.ctrlKey || e.metaKey;
+      const alt = e.altKey && !mod;
       const k = e.key.toLowerCase();
+
+      // Alt 组合键：终端聚焦时也可用；
+      // stopPropagation 阻止 xterm 把它作为 ESC 序列发给 Shell
+      if (alt && (k === "t" || k === "w")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (k === "t") void s.openTerminal(null);
+        else if (s.activeTabId) s.closeTab(s.activeTabId);
+        return;
+      }
+
+      // Ctrl/Cmd+Tab 切换标签页（不是 Shell 编辑键，全局可用）
+      if (mod && e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        s.cycleTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+
+      if (!mod) return;
+      // 终端聚焦时，Ctrl+W（删除前一个词）、Ctrl+T（交换字符）等是 Shell
+      // 的编辑键，必须交还 Shell 处理；输入框聚焦时同样放行，避免误关标签页
+      const target = e.target as HTMLElement | null;
+      if (target?.closest(".term-host, input, textarea, select")) return;
+
       if (k === "t") {
         e.preventDefault();
+        e.stopPropagation();
         void s.openTerminal(null);
       } else if (k === "w") {
         e.preventDefault();
+        e.stopPropagation();
         if (s.activeTabId) s.closeTab(s.activeTabId);
-      } else if (e.key === "Tab") {
-        e.preventDefault();
-        s.cycleTab(e.shiftKey ? -1 : 1);
       }
     };
     window.addEventListener("keydown", onKey, true);
