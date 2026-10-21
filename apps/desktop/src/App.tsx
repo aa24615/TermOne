@@ -21,7 +21,6 @@ export default function App() {
   const activeTabId = useStore((s) => s.activeTabId);
   const closeTab = useStore((s) => s.closeTab);
   const dialog = useStore((s) => s.dialog);
-  const confirmClose = useStore((s) => s.settings.confirmClose);
   const [confirmExit, setConfirmExit] = useState(false);
   const closingRef = useRef(false);
 
@@ -76,21 +75,30 @@ export default function App() {
 
   const openCount = tabs.filter((t) => t.sessionId).length;
 
+  // 只订阅一次关闭请求，避免频繁重订阅导致监听器泄漏（泄漏的旧监听器会
+  // 用过期状态重复 preventDefault，使退出流程卡死）
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    let un: (() => void) | undefined;
     void getCurrentWindow()
       .onCloseRequested((event) => {
         if (closingRef.current) return;
-        if (confirmClose && openCount > 0) {
+        const st = useStore.getState();
+        const hasRunning = st.tabs.some((t) => t.sessionId);
+        if (st.settings.confirmClose && hasRunning) {
           event.preventDefault();
           setConfirmExit(true);
         }
       })
       .then((fn) => {
-        unlisten = fn;
+        if (cancelled) fn();
+        else un = fn;
       });
-    return () => unlisten?.();
-  }, [confirmClose, openCount]);
+    return () => {
+      cancelled = true;
+      un?.();
+    };
+  }, []);
 
   return (
     <div className="app">
@@ -140,7 +148,12 @@ export default function App() {
               className="btn danger"
               onClick={() => {
                 closingRef.current = true;
-                void getCurrentWindow().close();
+                const win = getCurrentWindow();
+                void win.close().catch(() => {});
+                // 兜底：close 流程若被挂起，1.2s 后直接销毁窗口
+                setTimeout(() => {
+                  void win.destroy().catch(() => {});
+                }, 1200);
               }}
             >
               退出

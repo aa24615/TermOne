@@ -80,8 +80,27 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
 
     let unOutput: UnlistenFn | undefined;
     let unExit: UnlistenFn | undefined;
+    // 输出合批：高频输出时合并 12ms 窗口内的数据块一次写入，
+    // 避免每块都触发事件分发 + 渲染调度冲卡主线程
+    let pendingChunks: Uint8Array[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushPending = () => {
+      flushTimer = null;
+      if (pendingChunks.length === 0) return;
+      const total = pendingChunks.reduce((n, c) => n + c.length, 0);
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of pendingChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      pendingChunks = [];
+      term.write(merged);
+    };
     void listen<OutputPayload>("session:output", (e) => {
-      if (e.payload.id === sessionId) term.write(fromB64(e.payload.data));
+      if (e.payload.id !== sessionId) return;
+      pendingChunks.push(fromB64(e.payload.data));
+      if (flushTimer === null) flushTimer = setTimeout(flushPending, 12);
     }).then((fn) => {
       unOutput = fn;
     });
@@ -117,6 +136,7 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
       ro.disconnect();
       unOutput?.();
       unExit?.();
+      if (flushTimer !== null) clearTimeout(flushTimer);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
