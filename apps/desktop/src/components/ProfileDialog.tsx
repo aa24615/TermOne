@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../ipc";
 import { defaultConfig, defaultProfileName } from "../profile";
 import { useStore } from "../store";
-import type { ProfileKind, ProfileRow, SerialPortDto } from "../types";
+import type { ProfileKind, ProfileRow, SerialPortDto, ShellInfoDto } from "../types";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Dialog";
 import { IconRefresh } from "./icons";
@@ -28,11 +28,18 @@ export function ProfileDialog({ profileId }: Props) {
     existing ? { ...(existing.config as Record<string, unknown>) } : { ...defaultConfig("local") },
   );
   const [serialPorts, setSerialPorts] = useState<SerialPortDto[]>([]);
+  const [shells, setShells] = useState<ShellInfoDto[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (kind === "serial") {
       void refreshPorts();
+    }
+    if (kind === "local") {
+      void ipc
+        .listShells()
+        .then(setShells)
+        .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
@@ -48,8 +55,47 @@ export function ProfileDialog({ profileId }: Props) {
   const patch = (partial: Record<string, unknown>) =>
     setConfig((c) => ({ ...c, ...partial }));
 
-  const pickIdentityFile = async (): Promise<void> => {
-    try {
+  const SHELL_CUSTOM = "__custom__";
+  const preset = config.preset as string | undefined;
+  const isCustomShell = config.shellCustom === true;
+  const shellOptions = [
+    { value: "", label: "系统默认 Shell" },
+    ...shells.map((s) => ({
+      value: s.path,
+      label: s.name,
+      description:
+        s.preset === "docker"
+          ? "容器"
+          : s.preset === "ssh"
+            ? "远程"
+            : s.preset === "wsl"
+              ? "WSL"
+              : undefined,
+    })),
+    { value: SHELL_CUSTOM, label: "手动输入路径…" },
+  ];
+  const shellValue = isCustomShell ? SHELL_CUSTOM : ((config.shell as string) ?? "");
+
+  const selectShell = (v: string) => {
+    if (v === SHELL_CUSTOM) {
+      patch({ shellCustom: true, shell: "", preset: undefined });
+      return;
+    }
+    const entry = shells.find((s) => s.path === v);
+    const base: Record<string, unknown> = { shellCustom: false, shell: v || undefined };
+    if (entry?.preset === "docker") {
+      base.preset = "docker";
+      base.image = (config.image as string) ?? "";
+    } else if (entry?.preset === "ssh") {
+      base.preset = "ssh";
+      base.target = (config.target as string) ?? "";
+    } else {
+      base.preset = undefined;
+    }
+    patch(base);
+  };
+
+  const pickIdentityFile = async (): Promise<void> => {    try {
       const path = await open({
         title: "选择 SSH 私钥",
         multiple: false,
@@ -116,26 +162,63 @@ export function ProfileDialog({ profileId }: Props) {
         {kind === "local" && (
           <>
             <label>Shell</label>
-            <input
-              value={(config.shell as string) ?? ""}
-              onChange={(e) => patch({ shell: e.target.value })}
-              placeholder="留空使用系统默认（如 powershell / zsh）"
-              spellCheck={false}
+            <Dropdown
+              value={shellValue}
+              placeholder="系统默认 Shell"
+              options={shellOptions}
+              onChange={selectShell}
             />
-            <label>启动目录</label>
-            <input
-              value={(config.cwd as string) ?? ""}
-              onChange={(e) => patch({ cwd: e.target.value })}
-              placeholder="可选，如 D:\work 或 ~/projects"
-              spellCheck={false}
-            />
-            <label>启动参数</label>
-            <input
-              value={((config.args as string[]) ?? []).join(" ")}
-              onChange={(e) => patch({ args: e.target.value.split(" ").filter(Boolean) })}
-              placeholder="可选，空格分隔"
-              spellCheck={false}
-            />
+            {isCustomShell && (
+              <>
+                <label>可执行路径</label>
+                <input
+                  value={(config.shell as string) ?? ""}
+                  onChange={(e) => patch({ shell: e.target.value })}
+                  placeholder="/usr/bin/fish 或 pwsh.exe"
+                  spellCheck={false}
+                />
+              </>
+            )}
+            {preset === "docker" && (
+              <>
+                <label>镜像</label>
+                <input
+                  value={(config.image as string) ?? ""}
+                  onChange={(e) => patch({ image: e.target.value })}
+                  placeholder="ubuntu:22.04"
+                  spellCheck={false}
+                />
+              </>
+            )}
+            {preset === "ssh" && (
+              <>
+                <label>目标</label>
+                <input
+                  value={(config.target as string) ?? ""}
+                  onChange={(e) => patch({ target: e.target.value })}
+                  placeholder="user@host"
+                  spellCheck={false}
+                />
+              </>
+            )}
+            {(preset === undefined || preset === "shell") && (
+              <>
+                <label>启动目录</label>
+                <input
+                  value={(config.cwd as string) ?? ""}
+                  onChange={(e) => patch({ cwd: e.target.value })}
+                  placeholder="可选，如 D:\work 或 ~/projects"
+                  spellCheck={false}
+                />
+                <label>启动参数</label>
+                <input
+                  value={((config.args as string[]) ?? []).join(" ")}
+                  onChange={(e) => patch({ args: e.target.value.split(" ").filter(Boolean) })}
+                  placeholder="可选，空格分隔"
+                  spellCheck={false}
+                />
+              </>
+            )}
           </>
         )}
 

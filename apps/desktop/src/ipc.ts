@@ -7,6 +7,7 @@ import type {
   SessionInfo,
   SessionRequest,
   SettingRow,
+  ShellInfoDto,
   SyncItem,
 } from "./types";
 
@@ -32,6 +33,7 @@ export const ipc = {
   appInfo: () => invoke<AppInfoDto>("app_info"),
   defaultShell: () => invoke<string>("default_shell"),
   serialPorts: () => invoke<SerialPortDto[]>("serial_list_ports"),
+  listShells: () => invoke<ShellInfoDto[]>("shells_list"),
 
   sessionOpen: (req: SessionRequest) => invoke<SessionInfo>("session_open", { req }),
   sessionWrite: (id: string, dataB64: string) =>

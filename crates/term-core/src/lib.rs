@@ -7,7 +7,7 @@ pub mod storage;
 
 pub use error::{Result, TermError};
 pub use session::{
-    default_shell, list_ports, ExitSink, OutputSink, PortInfo, SessionId, SessionInfo,
-    SessionKind, SessionManager, SessionRequest, SshAuth,
+    default_shell, list_ports, list_shells, ExitSink, OutputSink, PortInfo, ShellInfo,
+    SessionId, SessionInfo, SessionKind, SessionManager, SessionRequest, SshAuth,
 };
 pub use storage::{BackupStats, Db, ProfileRow, SettingRow, SyncItem};

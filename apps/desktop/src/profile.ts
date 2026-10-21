@@ -62,10 +62,18 @@ export function buildSessionRequest(profile?: ProfileRow): SessionRequest {
   switch (profile.kind) {
     case "local": {
       const c = profile.config as LocalProfileConfig;
+      let args = c.args ?? [];
+      if (c.preset === "docker") {
+        const image = (c.image ?? "").trim();
+        args = image ? ["run", "--rm", "-it", image] : ["run", "--rm", "-it"];
+      } else if (c.preset === "ssh") {
+        const target = (c.target ?? "").trim();
+        args = target ? ["-t", target] : [];
+      }
       return {
         kind: "local",
         shell: c.shell || undefined,
-        args: c.args ?? [],
+        args,
         cwd: c.cwd || undefined,
       };
     }

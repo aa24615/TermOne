@@ -5,9 +5,11 @@
 
 mod local;
 mod serial;
+mod shells;
 mod ssh;
 
 pub use serial::{list_ports, PortInfo};
+pub use shells::{list_shells, ShellInfo};
 
 use std::collections::HashMap;
 use std::io::Write;

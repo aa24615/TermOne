@@ -7,8 +7,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use term_core::{
-    list_ports, secrets, BackupStats, ProfileRow, SessionInfo, SessionRequest, SettingRow,
-    SyncItem,
+    list_ports, list_shells, secrets, BackupStats, ProfileRow, SessionInfo, SessionRequest,
+    SettingRow, SyncItem,
 };
 
 use crate::state::AppState;
@@ -84,6 +84,11 @@ pub async fn default_shell() -> CmdResult<String> {
 #[tauri::command]
 pub async fn serial_list_ports() -> CmdResult<Vec<term_core::PortInfo>> {
     list_ports().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn shells_list() -> CmdResult<Vec<term_core::ShellInfo>> {
+    Ok(list_shells())
 }
 
 // ---------------- 会话 ----------------

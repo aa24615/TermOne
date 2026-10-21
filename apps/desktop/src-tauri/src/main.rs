@@ -27,6 +27,7 @@ fn main() {
             commands::app_info,
             commands::default_shell,
             commands::serial_list_ports,
+            commands::shells_list,
             commands::session_open,
             commands::session_write,
             commands::session_resize,

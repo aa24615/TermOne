@@ -4,6 +4,11 @@ export interface LocalProfileConfig {
   shell?: string;
   args?: string[];
   cwd?: string;
+  /** shell=普通 Shell；docker/ssh/wsl=快捷启动器（自动组装参数） */
+  preset?: "shell" | "docker" | "ssh" | "wsl";
+  image?: string;
+  target?: string;
+  shellCustom?: boolean;
 }
 
 export interface SshProfileConfig {
@@ -88,6 +93,12 @@ export interface SerialPortDto {
   name: string;
   product?: string;
   manufacturer?: string;
+}
+
+export interface ShellInfoDto {
+  name: string;
+  path: string;
+  preset: string;
 }
 
 export interface AppInfoDto {
