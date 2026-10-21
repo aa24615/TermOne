@@ -66,7 +66,16 @@ export function AccountDialog() {
             {mode === "login" ? "没有账号？注册" : "已有账号？登录"}
           </button>
           <button type="submit" className="btn primary" disabled={busy}>
-            {busy ? "请稍候…" : mode === "login" ? "登录" : "注册并登录"}
+            {busy ? (
+              <>
+                <span className="spinner" />
+                请稍候…
+              </>
+            ) : mode === "login" ? (
+              "登录"
+            ) : (
+              "注册并登录"
+            )}
           </button>
         </span>
 

@@ -57,7 +57,7 @@ interface TermStore {
   saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
   loadProfiles(): Promise<void>;
   reloadAfterImport(): Promise<void>;
-  saveProfile(profile: ProfileRow): Promise<void>;
+  saveProfile(profile: ProfileRow): Promise<boolean>;
   deleteProfile(id: string): Promise<void>;
   openTerminal(profileId: string | null): Promise<void>;
   closeTab(tabId: string): void;
@@ -133,6 +133,8 @@ async function apiFetch<T>(
 
 /** 变更后延迟触发自动同步（防抖）。 */
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
+/** 设置写盘防抖计时器（按 key）。 */
+const settingTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 export function scheduleSync(delayMs = 3000) {
   const st = useStore.getState();
   if (!st.auth.token || !st.settings.autoSync) return;
@@ -227,12 +229,16 @@ export const useStore = create<TermStore>()((set, get) => ({
   saveSetting: async (key, value) => {
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
     if (key === "theme") applyThemeToDom(String(value));
-    try {
-      await ipc.settingSet(key, serializeSetting(value));
-      scheduleSync();
-    } catch (e) {
-      get().showToast(`保存设置失败: ${errMsg(e)}`, "error");
-    }
+    // 输入类设置按键级触发，防抖落盘避免连击 IPC 造成卡顿
+    const pending = settingTimers[key];
+    if (pending) clearTimeout(pending);
+    settingTimers[key] = setTimeout(() => {
+      delete settingTimers[key];
+      void ipc
+        .settingSet(key, serializeSetting(value))
+        .then(() => scheduleSync())
+        .catch((e) => get().showToast(`保存设置失败: ${errMsg(e)}`, "error"));
+    }, 200);
   },
 
   loadProfiles: async () => {
@@ -260,8 +266,10 @@ export const useStore = create<TermStore>()((set, get) => ({
         return { profiles };
       });
       scheduleSync();
+      return true;
     } catch (e) {
       get().showToast(`保存档案失败: ${errMsg(e)}`, "error");
+      return false;
     }
   },
 

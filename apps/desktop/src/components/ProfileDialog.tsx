@@ -19,6 +19,7 @@ export function ProfileDialog({ profileId }: Props) {
   const profiles = useStore((s) => s.profiles);
   const saveProfile = useStore((s) => s.saveProfile);
   const setDialog = useStore((s) => s.setDialog);
+  const showToast = useStore((s) => s.showToast);
 
   const existing = profileId ? profiles.find((p) => p.id === profileId) : undefined;
 
@@ -130,8 +131,11 @@ export function ProfileDialog({ profileId }: Props) {
     };
     setSaving(true);
     try {
-      await saveProfile(row);
-      setDialog(null);
+      const ok = await saveProfile(row);
+      if (ok) {
+        showToast("已保存", "success");
+        setDialog(null);
+      }
     } finally {
       setSaving(false);
     }
@@ -373,7 +377,14 @@ export function ProfileDialog({ profileId }: Props) {
             取消
           </button>
           <button className="btn primary" disabled={saving} onClick={() => void submit()}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? (
+              <>
+                <span className="spinner" />
+                保存中…
+              </>
+            ) : (
+              "保存"
+            )}
           </button>
         </div>
       </div>

@@ -598,6 +598,28 @@ kbd {
   background: var(--bg-hover);
 }
 
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.9;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .btn.primary {
   background: var(--accent);
   border-color: transparent;
