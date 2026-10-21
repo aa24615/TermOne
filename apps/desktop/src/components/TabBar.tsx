@@ -1,9 +1,11 @@
 import { useStore } from "../store";
+import type { ProfileConfig } from "../types";
 import { IconPlus, IconX } from "./icons";
 
 export function TabBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTabId = useStore((s) => s.activeTabId);
+  const profiles = useStore((s) => s.profiles);
   const setActiveTab = useStore((s) => s.setActiveTab);
   const closeTab = useStore((s) => s.closeTab);
   const openTerminal = useStore((s) => s.openTerminal);
@@ -11,7 +13,10 @@ export function TabBar() {
   return (
     <div className="tabbar">
       <div className="tabs">
-        {tabs.map((t) => (
+        {tabs.map((t) => {
+          const profile = t.profileId ? profiles.find((p) => p.id === t.profileId) : undefined;
+          const color = profile ? (profile.config as ProfileConfig).color : undefined;
+          return (
           <div
             key={t.id}
             className={`tab${t.id === activeTabId ? " active" : ""}${t.exitInfo ? " ended" : ""}`}
@@ -21,7 +26,10 @@ export function TabBar() {
             }}
             title={t.sessionTitle ?? t.title}
           >
-            <span className={`tab-dot dot-${t.kind}`} />
+            <span
+              className={`tab-dot dot-${t.kind}`}
+              style={color ? { background: color } : undefined}
+            />
             <span className="tab-title">{t.title}</span>
             <button
               className="tab-close"
@@ -34,7 +42,8 @@ export function TabBar() {
               <IconX size={11} />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
       <button
         className="icon-btn tab-add"

@@ -10,6 +10,16 @@ import { Modal } from "./Dialog";
 import { IconRefresh } from "./icons";
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+const PROFILE_COLORS = [
+  "#ff5d6c",
+  "#ff9f43",
+  "#eab308",
+  "#3ecf8e",
+  "#4cc9f0",
+  "#5b8def",
+  "#c084fc",
+  "#f472b6",
+];
 
 interface Props {
   profileId?: string;
@@ -114,7 +124,10 @@ export function ProfileDialog({ profileId }: Props) {
 
   const switchKind = (next: ProfileKind) => {
     setKind(next);
-    setConfig({ ...defaultConfig(next) });
+    setConfig((c) => ({
+      ...defaultConfig(next),
+      color: (c as { color?: string }).color,
+    }));
   };
 
   const submit = async () => {
@@ -162,6 +175,26 @@ export function ProfileDialog({ profileId }: Props) {
           placeholder={defaultProfileName(kind, config as never)}
           spellCheck={false}
         />
+
+        <label>颜色</label>
+        <div className="color-options">
+          <button
+            type="button"
+            className={`color-swatch none${!config.color ? " active" : ""}`}
+            title="默认"
+            onClick={() => patch({ color: undefined })}
+          />
+          {PROFILE_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`color-swatch${config.color === c ? " active" : ""}`}
+              style={{ background: c }}
+              title={c}
+              onClick={() => patch({ color: c })}
+            />
+          ))}
+        </div>
 
         {kind === "local" && (
           <>

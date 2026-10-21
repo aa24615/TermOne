@@ -974,6 +974,38 @@ input[type="checkbox"] {
   flex: 1;
 }
 
+/* ============ 档案颜色选择 ============ */
+
+.color-options {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease;
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch.active {
+  box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent);
+}
+
+.color-swatch.none {
+  background: transparent;
+  border: 1.5px dashed var(--fg-faint);
+}
+
 .theme-options {
   display: flex;
   flex-wrap: wrap;

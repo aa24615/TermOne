@@ -58,14 +58,19 @@ export function Sidebar() {
 
           {filtered.length === 0 && <div className="side-empty">暂无档案，点击 + 新建</div>}
 
-          {filtered.map((p) => (
+          {filtered.map((p) => {
+            const color = (p.config as { color?: string }).color;
+            return (
             <div
               key={p.id}
               className="profile-item"
               onClick={() => void openTerminal(p.id)}
-              title="双击列表打开会话"
+              title="点击打开会话"
             >
-              <span className={`kind-badge kind-${p.kind}`}>
+              <span
+                className={`kind-badge kind-${p.kind}`}
+                style={color ? { background: color, color: "#fff" } : undefined}
+              >
                 <KindIcon kind={p.kind} />
               </span>
               <div className="profile-meta">
@@ -95,7 +100,8 @@ export function Sidebar() {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

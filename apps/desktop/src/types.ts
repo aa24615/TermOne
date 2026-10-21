@@ -1,6 +1,12 @@
 export type ProfileKind = "local" | "ssh" | "serial";
 
-export interface LocalProfileConfig {
+/** 所有档案类型的公共字段 */
+interface ProfileConfigBase {
+  /** 区分色（如 #ff5d6c），空为按类型默认 */
+  color?: string;
+}
+
+export interface LocalProfileConfig extends ProfileConfigBase {
   shell?: string;
   args?: string[];
   cwd?: string;
@@ -11,7 +17,7 @@ export interface LocalProfileConfig {
   shellCustom?: boolean;
 }
 
-export interface SshProfileConfig {
+export interface SshProfileConfig extends ProfileConfigBase {
   host: string;
   port: number;
   user?: string;
@@ -19,7 +25,7 @@ export interface SshProfileConfig {
   identityFile?: string;
 }
 
-export interface SerialProfileConfig {
+export interface SerialProfileConfig extends ProfileConfigBase {
   path: string;
   baud: number;
   dataBits: 7 | 8;
