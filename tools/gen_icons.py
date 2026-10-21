@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""生成 TermOne 应用图标（PNG / ICO / ICNS），仅依赖 Python 标准库。
+
+用法: python3 tools/gen_icons.py
+输出目录: apps/desktop/src-tauri/icons/
+"""
+import math
+import os
+import struct
+import zlib
+
+BASE = 512
+OUT = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "apps", "desktop", "src-tauri", "icons"))
+
+BG_TOP = (124, 106, 255)    # #7C6AFF
+BG_BOTTOM = (64, 44, 214)   # #402CD6
+FG = (245, 246, 255)        # #F5F6FF
+
+
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
+def rr_sdf(x, y, size, r):
+    """点到圆角矩形的带符号距离（内部为负）。"""
+    hx = size / 2.0
+    hy = size / 2.0
+    qx = abs(x - hx) - (hx - r)
+    qy = abs(y - hy) - (hy - r)
+    ax = max(qx, 0.0)
+    ay = max(qy, 0.0)
+    return math.hypot(ax, ay) + min(max(qx, qy), 0.0) - r
+
+
+def seg_d(x, y, x1, y1, x2, y2):
+    """点到线段的距离。"""
+    vx = x2 - x1
+    vy = y2 - y1
+    wx = x - x1
+    wy = y - y1
+    denom = vx * vx + vy * vy
+    t = 0.0 if denom == 0 else clamp((wx * vx + wy * vy) / denom, 0.0, 1.0)
+    return math.hypot(wx - t * vx, wy - t * vy)
+
+
+def render(size):
+    """绘制 512 基准图标：圆角方块 + 渐变 + “>_” 符号，SDF 抗锯齿。"""
+    s = size / BASE
+    r = 112 * s
+    lw = 34 * s
+    img = []
+    for y in range(size):
+        py = y + 0.5
+        g = clamp(py / size, 0.0, 1.0)
+        bg = tuple(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * g for i in range(3))
+        row = []
+        for x in range(size):
+            px = x + 0.5
+            a = clamp(0.5 - rr_sdf(px, py, size, r), 0.0, 1.0)
+            if a <= 0.0:
+                row.append((0, 0, 0, 0))
+                continue
+            dg = min(
+                seg_d(px, py, 122 * s, 148 * s, 238 * s, 256 * s),
+                seg_d(px, py, 238 * s, 256 * s, 122 * s, 364 * s),
+                seg_d(px, py, 272 * s, 368 * s, 392 * s, 368 * s),
+            ) - lw / 2.0
+            fg_a = clamp(0.5 - dg, 0.0, 1.0)
+            col = tuple(bg[i] + (FG[i] - bg[i]) * fg_a for i in range(3))
+            row.append((int(col[0]), int(col[1]), int(col[2]), int(a * 255)))
+        img.append(row)
+    return img
+
+
+def downscale(img, from_size, to_size):
+    f = from_size // to_size
+    out = []
+    for y in range(to_size):
+        row = []
+        for x in range(to_size):
+            sr = sg = sb = sa = 0
+            for dy in range(f):
+                src = img[y * f + dy]
+                for dx in range(f):
+                    c = src[x * f + dx]
+                    sr += c[0]
+                    sg += c[1]
+                    sb += c[2]
+                    sa += c[3]
+            n = f * f
+            row.append((sr // n, sg // n, sb // n, sa // n))
+        out.append(row)
+    return out
+
+
+def png_bytes(img):
+    h = len(img)
+    w = len(img[0])
+    raw = b"".join(b"\x00" + bytes(v for px in row for v in px) for row in img)
+
+    def chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
+
+
+def write_ico(path, entries):
+    count = len(entries)
+    header = struct.pack("<HHH", 0, 1, count)
+    offset = 6 + 16 * count
+    directory = b""
+    blobs = b""
+    for size, data in entries:
+        w = 0 if size >= 256 else size
+        directory += struct.pack("<BBBBHHII", w, w, 0, 0, 1, 32, len(data), offset)
+        offset += len(data)
+        blobs += data
+    with open(path, "wb") as f:
+        f.write(header + directory + blobs)
+
+
+def write_icns(path, entries):
+    total = 8
+    for _, d in entries:
+        total += 8 + len(d)
+    out = b"icns" + struct.pack(">I", total)
+    for t, d in entries:
+        out += t.encode("ascii") + struct.pack(">I", 8 + len(d)) + d
+    with open(path, "wb") as f:
+        f.write(out)
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    print("rendering %dpx icon ..." % BASE)
+    base = render(BASE)
+    sizes = {
+        512: base,
+        256: downscale(base, 512, 256),
+    }
+    sizes[128] = downscale(sizes[256], 256, 128)
+    sizes[32] = downscale(sizes[128], 128, 32)
+
+    names = {32: "32x32.png", 128: "128x128.png", 256: "128x128@2x.png", 512: "icon.png"}
+    for sz, img in sizes.items():
+        p = os.path.join(OUT, names[sz])
+        with open(p, "wb") as f:
+            f.write(png_bytes(img))
+        print("wrote", p)
+
+    ico_path = os.path.join(OUT, "icon.ico")
+    write_ico(ico_path, [
+        (32, png_bytes(sizes[32])),
+        (128, png_bytes(sizes[128])),
+        (256, png_bytes(sizes[256])),
+    ])
+    print("wrote", ico_path)
+
+    icns_path = os.path.join(OUT, "icon.icns")
+    write_icns(icns_path, [
+        ("ic07", png_bytes(sizes[128])),
+        ("ic08", png_bytes(sizes[256])),
+        ("ic09", png_bytes(sizes[512])),
+    ])
+    print("wrote", icns_path)
+
+
+if __name__ == "__main__":
+    main()

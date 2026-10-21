@@ -1,0 +1,20 @@
+{
+  "name": "termone",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TermOne —— 轻量、漂亮的跨平台终端（Windows / macOS）",
+  "workspaces": [
+    "apps/desktop",
+    "apps/server"
+  ],
+  "scripts": {
+    "dev:desktop": "npm run dev --workspace @termone/desktop",
+    "dev:server": "npm run dev --workspace @termone/server",
+    "build:desktop": "npm run build --workspace @termone/desktop",
+    "check": "npm run check --workspace @termone/desktop && npm run check --workspace @termone/server",
+    "tauri": "npm run tauri --workspace @termone/desktop"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

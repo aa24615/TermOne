@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+*.log
+.DS_Store
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+data-test/
+.Trash-*/

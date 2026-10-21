@@ -1,0 +1,18 @@
+[package]
+name = "termone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TermOne —— 轻量、漂亮的跨平台终端"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+term-core = { path = "../../../crates/term-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+log = { workspace = true }
