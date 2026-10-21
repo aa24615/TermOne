@@ -1,0 +1,16 @@
+# 发版按钮配置：在 main 分支详情页点击按钮触发 web_trigger_release 事件。
+# 按钮语法见 https://docs.cnb.cool/zh/build/web-trigger.md
+# 注意: 此文件不支持 include / imports；事件流水线在 .cnb.yml 的 main.web_trigger_release 下定义。
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 发版 Release
+        description: 输入版本号，自动打标签、构建服务端镜像与 Windows/macOS 安装包并发布 Release
+        event: web_trigger_release
+        inputs:
+          VERSION:
+            name: 版本号
+            type: input
+            required: true
+            default: "0.1.0"
+            description: 不带 v 前缀（如 0.1.0），将创建 v0.1.0 标签并发布

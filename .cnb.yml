@@ -1,11 +1,14 @@
 # TermOne CI 流水线
 #
-# 1) main push    : 类型检查 + 前端构建（云端 Linux 节点）
-#                   + 服务端 Docker 镜像构建并推送制品库（latest / main）
-# 2) tag v* 推送  : 服务端镜像（版本 tag + latest）+ 创建 Release
-#                   + Windows / macOS 桌面端安装包构建并上传 Release 附件
+# 质量检查：main push 时云端执行类型检查与前端构建
+# 发    版：仅通过按钮触发 —— 在「分支详情页（main）」点击「发版 Release」按钮，
+#           输入版本号后执行 web_trigger_release 事件：
+#             1) server-image    校验版本号、创建并推送 v* 标签、构建/推送 Docker 镜像
+#             2) desktop-windows 自托管 Windows 节点打包 NSIS exe / msi 并上传 Release
+#             3) desktop-macos   自托管 macOS 节点打包 dmg 并上传 Release
 #
-# 桌面端两条流水线依赖根组织下的自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）:
+# 按钮定义见 .cnb/web_trigger.yml。
+# 桌面端两条流水线依赖根组织自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）:
 #   - 接入方式见 https://docs.cnb.cool/zh/build/build-node.md 「根组织自定义 Runner」
 #   - Windows 节点标签需含 windows、x64；macOS 节点需含 macos（Apple Silicon 加 arm64）
 #   - 构建机需预装 Node.js >= 20 与 Rust 工具链（含平台依赖: MSVC / Xcode CLT）
@@ -24,45 +27,25 @@ main:
             npm run check
             npm run build:desktop
 
+  web_trigger_release:
     - name: server-image
       services:
         - docker
       stages:
+        - name: validate & create tag
+          script: |
+            VERSION="${VERSION#v}"
+            echo "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$' || { echo "版本号不合法: ${VERSION}"; exit 1; }
+            git tag "v${VERSION}"
+            git push "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG_LOWERCASE}.git" "v${VERSION}"
+            echo "已创建并推送标签 v${VERSION}"
         - name: build image
-          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main apps/server
+          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:v${VERSION} apps/server
         - name: push image
           script: |
-            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main
-            docker tag ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:main ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
+            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:v${VERSION}
+            docker tag ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:v${VERSION} ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
             docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
-
-"v*":
-  tag_push:
-    - name: server-image
-      services:
-        - docker
-      stages:
-        - name: build image
-          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH} apps/server
-        - name: push image
-          script: |
-            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH}
-            docker tag ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH} ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
-            docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/termone-server:latest
-        - name: create release
-          type: git:release
-          options:
-            title: TermOne ${CNB_BRANCH}
-            description: |
-              TermOne ${CNB_BRANCH} 发布。
-
-              ## 下载
-              - Windows: 安装包 (.exe / .msi)
-              - macOS: 镜像 (.dmg)
-
-              ## 服务端镜像
-              docker.cnb.cool/${CNB_REPO_SLUG_LOWERCASE}/termone-server:${CNB_BRANCH}
-            latest: true
 
     - name: desktop-windows
       runner:
@@ -78,7 +61,9 @@ main:
         - name: build bundles
           script: npm run tauri build
         - name: upload to release
-          script: node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
+          script: |
+            $env:RELEASE_TAG = "v$env:VERSION"
+            node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
 
     - name: desktop-macos
       runner:
@@ -94,4 +79,4 @@ main:
         - name: build bundles
           script: npm run tauri build
         - name: upload to release
-          script: node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
+          script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle

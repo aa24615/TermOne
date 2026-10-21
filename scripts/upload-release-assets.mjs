@@ -11,8 +11,11 @@
  * 环境变量（流水线内自动注入）:
  *   CNB_TOKEN                 访问令牌
  *   CNB_REPO_SLUG_LOWERCASE   仓库路径（org/repo）
- *   CNB_BRANCH                tag_push 事件下即 tag 名
+ *   RELEASE_TAG               Release 标签名（如 v0.1.0）；缺省回退到 CNB_BRANCH
+ *   CNB_BRANCH                当前分支/标签名
  *   CNB_API                   API 地址，默认 https://api.cnb.cool
+ *
+ * 行为: Release 不存在时自动创建（等待对应的 git 标签出现），随后上传附件。
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -20,7 +23,7 @@ import { basename, join, resolve } from "node:path";
 const API = (process.env.CNB_API ?? "https://api.cnb.cool").replace(/\/+$/, "");
 const TOKEN = process.env.CNB_TOKEN;
 const REPO = process.env.CNB_REPO_SLUG_LOWERCASE;
-const TAG = process.env.CNB_BRANCH;
+const TAG = process.env.RELEASE_TAG || process.env.CNB_BRANCH;
 const ASSET_EXTS = [".exe", ".msi", ".dmg", ".app.tar.gz", ".zip"];
 const RELEASE_WAIT_MS = 15_000;
 const RELEASE_WAIT_MAX = 40;
@@ -32,7 +35,7 @@ function fail(msg) {
 
 if (!TOKEN) fail("缺少 CNB_TOKEN 环境变量");
 if (!REPO) fail("缺少 CNB_REPO_SLUG_LOWERCASE 环境变量");
-if (!TAG) fail("缺少 CNB_BRANCH 环境变量（tag_push 事件自动提供）");
+if (!TAG) fail("缺少 RELEASE_TAG（或 CNB_BRANCH）环境变量");
 
 function isAsset(name) {
   const lower = name.toLowerCase();
@@ -68,18 +71,39 @@ async function api(path, init = {}) {
   return res.json().catch(() => ({}));
 }
 
-async function findReleaseId() {
-  for (let i = 1; i <= RELEASE_WAIT_MAX; i++) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 获取或创建 Release（与镜像/打包流水线并行执行，需容忍时序）:
+ * 1) 按 tag 查询 Release；2) 不存在则创建（git 标签可能尚未推送，失败则稍后重试）。
+ */
+async function ensureRelease() {
+  const tagPath = `/${REPO}/-/releases/tags/${encodeURIComponent(TAG)}`;
+  for (let attempt = 1; attempt <= RELEASE_WAIT_MAX; attempt++) {
     try {
-      const rel = await api(`/${REPO}/-/releases/tags/${encodeURIComponent(TAG)}`);
+      const rel = await api(tagPath);
       if (rel && rel.id) return rel.id;
     } catch {
-      // Release 可能尚未创建（与镜像/发布流水线并行执行），稍后重试
+      // 尚未创建
     }
-    console.log(`[upload] Release 未就绪，${RELEASE_WAIT_MS / 1000}s 后重试 (${i}/${RELEASE_WAIT_MAX})`);
-    await new Promise((r) => setTimeout(r, RELEASE_WAIT_MS));
+    try {
+      const created = await api(`/${REPO}/-/releases`, {
+        method: "POST",
+        body: JSON.stringify({
+          tag_name: TAG,
+          name: `TermOne ${TAG}`,
+          body: `TermOne ${TAG} 发布。`,
+          make_latest: "true",
+        }),
+      });
+      if (created && created.id) return created.id;
+    } catch {
+      // 标签尚未推送，或已被并行流水线创建
+    }
+    console.log(`[upload] Release 未就绪，${RELEASE_WAIT_MS / 1000}s 后重试 (${attempt}/${RELEASE_WAIT_MAX})`);
+    await sleep(RELEASE_WAIT_MS);
   }
-  fail("等待 Release 超时，请确认流水线已创建对应 Release");
+  fail("等待/创建 Release 超时，请确认流水线已创建对应标签");
 }
 
 async function uploadAsset(releaseId, file) {
@@ -112,7 +136,7 @@ if (files.length === 0) {
 }
 
 console.log(`[upload] 目标: ${REPO} @ ${TAG}，共 ${files.length} 个文件`);
-const releaseId = await findReleaseId();
+const releaseId = await ensureRelease();
 for (const file of files) {
   try {
     await uploadAsset(releaseId, file);
