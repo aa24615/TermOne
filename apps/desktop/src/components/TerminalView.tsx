@@ -59,7 +59,17 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
 
     const sessionId = tab.sessionId;
     const dataDisposer = term.onData((d) => {
+      // 输入任意内容（含回车）时清除意外触发/残留的文本选区
+      if (term.hasSelection()) term.clearSelection();
       if (sessionId) void ipc.sessionWrite(sessionId, toB64(d)).catch(() => {});
+    });
+    // Esc 清除选区（其次才作为普通按键发给 Shell）
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === "keydown" && ev.key === "Escape" && term.hasSelection()) {
+        term.clearSelection();
+        return false;
+      }
+      return true;
     });
     const resizeDisposer = term.onResize(({ cols, rows }) => {
       if (sessionId) void ipc.sessionResize(sessionId, cols, rows).catch(() => {});
@@ -84,14 +94,21 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
       unExit = fn;
     });
 
-    const ro = new ResizeObserver(() => {
-      if (useStore.getState().activeTabId !== tab.id) return;
-      try {
-        fit.fit();
-      } catch {
-        // 尺寸异常时忽略
-      }
-    });
+    let fitScheduled = false;
+    const scheduleFit = () => {
+      if (fitScheduled) return;
+      fitScheduled = true;
+      requestAnimationFrame(() => {
+        fitScheduled = false;
+        if (useStore.getState().activeTabId !== tab.id) return;
+        try {
+          fit.fit();
+        } catch {
+          // 尺寸异常时忽略
+        }
+      });
+    };
+    const ro = new ResizeObserver(scheduleFit);
     ro.observe(host);
 
     return () => {
