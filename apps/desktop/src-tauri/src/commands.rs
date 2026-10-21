@@ -7,7 +7,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use term_core::{
-    list_ports, secrets, ProfileRow, SessionInfo, SessionRequest, SettingRow, SyncItem,
+    list_ports, secrets, BackupStats, ProfileRow, SessionInfo, SessionRequest, SettingRow,
+    SyncItem,
 };
 
 use crate::state::AppState;
@@ -256,5 +257,31 @@ pub async fn sync_set_last_pull(state: State<'_, AppState>, ts: i64) -> CmdResul
         .lock()
         .unwrap()
         .sync_set_last_pull(ts)
+        .map_err(|e| e.to_string())
+}
+
+// ---------------- 本地备份 ----------------
+
+#[tauri::command]
+pub async fn backup_export(state: State<'_, AppState>, path: String) -> CmdResult<BackupStats> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .backup_export(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn backup_import(
+    state: State<'_, AppState>,
+    path: String,
+    replace: bool,
+) -> CmdResult<BackupStats> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .backup_import(std::path::Path::new(&path), replace)
         .map_err(|e| e.to_string())
 }

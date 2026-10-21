@@ -6,6 +6,7 @@
 - **SSH 远程**：基于系统 OpenSSH，密钥 / Agent / 密码认证，known_hosts 与系统一致
 - **串口 Serial**：USB-TTL 调试（波特率 / 数据位 / 校验 / 流控可配）
 - **本地 SQLite**：连接档案与设置存于本地数据库，无网络也可用
+- **本地备份**：一键导出/导入 JSON（档案 + 设置；合并/覆盖两种模式；不含机密）
 - **云同步**：自建同步服务（REST + JWT），档案与设置多设备同步备份
 - **安全设计**：SSH 密码、密钥口令等机密保存在 OS 密钥环（Windows Credential Manager / macOS Keychain），**永不上传**
 - **主题**：Midnight / Daylight / Dracula / Nord / Solarized Dark

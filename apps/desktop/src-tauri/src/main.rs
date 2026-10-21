@@ -17,6 +17,7 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState {
             sessions: SessionManager::new(),
             db,
@@ -40,6 +41,8 @@ fn main() {
             commands::sync_mark_pushed,
             commands::sync_last_pull,
             commands::sync_set_last_pull,
+            commands::backup_export,
+            commands::backup_import,
         ])
         .setup(|app| {
             // Windows 隐藏系统标题栏由前端自绘；macOS 使用 Overlay 保留交通灯

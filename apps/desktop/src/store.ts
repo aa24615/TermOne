@@ -55,6 +55,7 @@ interface TermStore {
   loadSettings(): Promise<void>;
   saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
   loadProfiles(): Promise<void>;
+  reloadAfterImport(): Promise<void>;
   saveProfile(profile: ProfileRow): Promise<void>;
   deleteProfile(id: string): Promise<void>;
   openTerminal(profileId: string | null): Promise<void>;
@@ -240,6 +241,11 @@ export const useStore = create<TermStore>()((set, get) => ({
     } catch (e) {
       get().showToast(`读取档案失败: ${errMsg(e)}`, "error");
     }
+  },
+
+  reloadAfterImport: async () => {
+    await get().loadProfiles();
+    await get().loadSettings();
   },
 
   saveProfile: async (profile) => {

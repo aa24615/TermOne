@@ -52,4 +52,9 @@ export const ipc = {
   syncMarkPushed: (items: SyncItem[]) => invoke<void>("sync_mark_pushed", { items }),
   syncLastPull: () => invoke<number>("sync_last_pull"),
   syncSetLastPull: (ts: number) => invoke<void>("sync_set_last_pull", { ts }),
+
+  backupExport: (path: string) =>
+    invoke<{ profiles: number; settings: number }>("backup_export", { path }),
+  backupImport: (path: string, replace: boolean) =>
+    invoke<{ profiles: number; settings: number }>("backup_import", { path, replace }),
 };

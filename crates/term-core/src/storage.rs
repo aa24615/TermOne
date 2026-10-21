@@ -64,6 +64,37 @@ pub struct SyncItem {
     pub deleted: bool,
 }
 
+/// 备份/导入的统计信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupStats {
+    pub profiles: u32,
+    pub settings: u32,
+}
+
+const BACKUP_KIND: &str = "termone-backup";
+const BACKUP_VERSION: u32 = 1;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupFile<'a> {
+    app: &'a str,
+    kind: &'a str,
+    version: u32,
+    exported_at: i64,
+    profiles: &'a [ProfileRow],
+    settings: &'a [SettingRow],
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupFileOwned {
+    #[serde(default)]
+    profiles: Vec<ProfileRow>,
+    #[serde(default)]
+    settings: Vec<SettingRow>,
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS profiles (
     id         TEXT PRIMARY KEY,
@@ -424,6 +455,130 @@ impl Db {
         .map_err(TermError::Db)?;
         Ok(())
     }
+
+    // ---------------- 本地备份 ----------------
+
+    /// 导出全部档案与设置为 JSON 备份文件。
+    /// 注意：系统密钥环中的机密（SSH 密码/口令）不会包含在备份里。
+    pub fn backup_export(&self, path: &std::path::Path) -> Result<BackupStats> {
+        let profiles = self.profile_list()?;
+        let settings = self.settings_all()?;
+        let stats = BackupStats {
+            profiles: profiles.len() as u32,
+            settings: settings.len() as u32,
+        };
+        let file = BackupFile {
+            app: "termone",
+            kind: BACKUP_KIND,
+            version: BACKUP_VERSION,
+            exported_at: now_ms(),
+            profiles: &profiles,
+            settings: &settings,
+        };
+        let json =
+            serde_json::to_string_pretty(&file).map_err(|e| TermError::Other(e.to_string()))?;
+        std::fs::write(path, json).map_err(TermError::Io)?;
+        Ok(stats)
+    }
+
+    /// 从备份文件导入。
+    /// - `replace = false`：合并模式，按 LWW 只接受比本地更新的数据，保留本地新增；
+    /// - `replace = true`：清空现有档案与设置后整体恢复。
+    /// 导入的数据标记 dirty，以便后续登录云同步时推送到服务端。
+    pub fn backup_import(&self, path: &std::path::Path, replace: bool) -> Result<BackupStats> {
+        let raw = std::fs::read_to_string(path).map_err(TermError::Io)?;
+        let file: BackupFileOwned = serde_json::from_str(&raw)
+            .map_err(|e| TermError::Other(format!("备份文件格式无效: {e}")))?;
+        let conn = self.conn.lock().unwrap();
+        let now = now_ms();
+        if replace {
+            conn.execute_batch("DELETE FROM profiles; DELETE FROM settings;")
+                .map_err(TermError::Db)?;
+        }
+        let mut profiles_count = 0u32;
+        let mut settings_count = 0u32;
+        if replace {
+            for p in &file.profiles {
+                let config_raw =
+                    serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
+                conn.execute(
+                    "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                    params![p.id, p.kind, p.name, config_raw, p.sort_order, now, now, 0i64],
+                )
+                .map_err(TermError::Db)?;
+                profiles_count += 1;
+            }
+            for s in &file.settings {
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at, dirty)
+                     VALUES (?1, ?2, ?3, 1)",
+                    params![s.key, s.value, now],
+                )
+                .map_err(TermError::Db)?;
+                settings_count += 1;
+            }
+        } else {
+            for p in &file.profiles {
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT updated_at FROM profiles WHERE id = ?1",
+                        params![p.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(TermError::Db)?;
+                if existing.map_or(false, |t| t >= p.updated_at) {
+                    continue;
+                }
+                let config_raw =
+                    serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
+                conn.execute(
+                    "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+                     ON CONFLICT(id) DO UPDATE SET
+                       kind = ?2, name = ?3, config = ?4, sort_order = ?5,
+                       updated_at = ?6, deleted = ?8, dirty = 1",
+                    params![
+                        p.id,
+                        p.kind,
+                        p.name,
+                        config_raw,
+                        p.sort_order,
+                        p.updated_at,
+                        p.created_at,
+                        p.deleted as i64
+                    ],
+                )
+                .map_err(TermError::Db)?;
+                profiles_count += 1;
+            }
+            for s in &file.settings {
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT updated_at FROM settings WHERE key = ?1",
+                        params![s.key],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(TermError::Db)?;
+                if existing.map_or(false, |t| t >= s.updated_at) {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT INTO settings (key, value, updated_at, dirty) VALUES (?1, ?2, ?3, 1)
+                     ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3, dirty = 1",
+                    params![s.key, s.value, s.updated_at],
+                )
+                .map_err(TermError::Db)?;
+                settings_count += 1;
+            }
+        }
+        Ok(BackupStats {
+            profiles: profiles_count,
+            settings: settings_count,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -499,5 +654,42 @@ mod tests {
         assert_eq!(dirty[0].key.as_deref(), Some("theme"));
         db.sync_mark_pushed(&dirty).unwrap();
         assert!(db.sync_export_dirty().unwrap().is_empty());
+    }
+
+    #[test]
+    fn backup_roundtrip() {
+        let db = tmp_db();
+        db.setting_set("theme", "nord").unwrap();
+        let p = ProfileRow {
+            id: "p1".into(),
+            kind: "ssh".into(),
+            name: "srv".into(),
+            config: serde_json::json!({ "host": "example.com" }),
+            sort_order: 0,
+            updated_at: 0,
+            created_at: 0,
+            deleted: false,
+            dirty: false,
+        };
+        db.profile_save(p).unwrap();
+
+        let path = std::env::temp_dir().join(format!("termone-bk-{}.json", uuid::Uuid::new_v4()));
+        let stats = db.backup_export(&path).unwrap();
+        assert_eq!(stats.profiles, 1);
+        assert_eq!(stats.settings, 1);
+
+        // 覆盖导入到全新数据库
+        let db2 = tmp_db();
+        let st = db2.backup_import(&path, true).unwrap();
+        assert_eq!(st.profiles, 1);
+        assert_eq!(st.settings, 1);
+        assert_eq!(db2.profile_list().unwrap()[0].name, "srv");
+        assert_eq!(db2.settings_all().unwrap()[0].value, "nord");
+
+        // 合并模式：本地数据更新时拒绝备份中的旧数据
+        db2.setting_set("theme", "midnight").unwrap();
+        let st2 = db2.backup_import(&path, false).unwrap();
+        assert_eq!(st2.settings, 0);
+        assert_eq!(db2.settings_all().unwrap()[0].value, "midnight");
     }
 }
