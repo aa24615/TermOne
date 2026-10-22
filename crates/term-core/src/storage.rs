@@ -1,4 +1,4 @@
-//! 本地 SQLite 存储：连接档案、应用设置与同步游标。
+//! 本地 SQLite 存储：连接档案、分组、应用设置与同步游标。
 //!
 //! 所有行都带有 `updated_at` / `dirty` / `deleted` 标记，
 //! 用于支撑「最后写入胜出（LWW）」的云同步协议。
@@ -32,7 +32,23 @@ pub struct ProfileRow {
     pub kind: String,
     pub name: String,
     pub config: serde_json::Value,
+    #[serde(default)]
+    pub group_id: Option<String>,
     pub sort_order: i64,
+    pub updated_at: i64,
+    pub created_at: i64,
+    pub deleted: bool,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupRow {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub sort_order: i64,
+    pub collapsed: bool,
     pub updated_at: i64,
     pub created_at: i64,
     pub deleted: bool,
@@ -53,11 +69,11 @@ pub struct SettingRow {
 #[serde(rename_all = "camelCase")]
 pub struct SyncItem {
     pub item_id: String,
-    /// "profile" | "setting"
+    /// "profile" | "setting" | "group"
     pub kind: String,
     #[serde(default)]
     pub key: Option<String>,
-    /// JSON 负载（profile 为对象序列化，setting 为原始字符串值）
+    /// JSON 负载（profile/group 为对象序列化，setting 为原始字符串值）
     pub data: String,
     pub updated_at: i64,
     #[serde(default)]
@@ -69,6 +85,7 @@ pub struct SyncItem {
 #[serde(rename_all = "camelCase")]
 pub struct BackupStats {
     pub profiles: u32,
+    pub groups: u32,
     pub settings: u32,
 }
 
@@ -83,6 +100,7 @@ struct BackupFile<'a> {
     version: u32,
     exported_at: i64,
     profiles: &'a [ProfileRow],
+    groups: &'a [GroupRow],
     settings: &'a [SettingRow],
 }
 
@@ -91,6 +109,8 @@ struct BackupFile<'a> {
 struct BackupFileOwned {
     #[serde(default)]
     profiles: Vec<ProfileRow>,
+    #[serde(default)]
+    groups: Vec<GroupRow>,
     #[serde(default)]
     settings: Vec<SettingRow>,
 }
@@ -101,7 +121,19 @@ CREATE TABLE IF NOT EXISTS profiles (
     kind       TEXT NOT NULL,
     name       TEXT NOT NULL,
     config     TEXT NOT NULL DEFAULT '{}',
+    group_id   TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0,
+    dirty      INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    parent_id  TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    collapsed  INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     deleted    INTEGER NOT NULL DEFAULT 0,
@@ -119,6 +151,25 @@ CREATE TABLE IF NOT EXISTS sync_state (
 );
 "#;
 
+/// 为存量数据库补充新列（兼容旧版本 termone.db）。
+fn ensure_column(conn: &Connection, table: &str, col: &str, def: &str) -> Result<()> {
+    let exists: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{col}'"),
+            [],
+            |r| r.get(0),
+        )
+        .map_err(TermError::Db)?;
+    if exists == 0 {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {col} {def}"),
+            [],
+        )
+        .map_err(TermError::Db)?;
+    }
+    Ok(())
+}
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -135,9 +186,11 @@ impl Db {
         let conn = Connection::open(&path).map_err(TermError::Db)?;
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA).map_err(TermError::Db)?;
-        Ok(Db {
+        ensure_column(&conn, "profiles", "group_id", "TEXT")?;
+        let db = Db {
             conn: Mutex::new(conn),
-        })
+        };
+        Ok(db)
     }
 
     // ---------------- profiles ----------------
@@ -146,7 +199,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty
+                "SELECT id, kind, name, config, sort_order, group_id, updated_at, created_at, deleted, dirty
                  FROM profiles WHERE deleted = 0
                  ORDER BY sort_order ASC, name ASC",
             )
@@ -159,11 +212,12 @@ impl Db {
                     kind: row.get(1)?,
                     name: row.get(2)?,
                     config: serde_json::from_str(&config_raw).unwrap_or(serde_json::Value::Null),
+                    group_id: row.get(5)?,
                     sort_order: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    created_at: row.get(6)?,
-                    deleted: row.get::<_, i64>(7)? != 0,
-                    dirty: row.get::<_, i64>(8)? != 0,
+                    updated_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    deleted: row.get::<_, i64>(8)? != 0,
+                    dirty: row.get::<_, i64>(9)? != 0,
                 })
             })
             .map_err(TermError::Db)?;
@@ -172,6 +226,43 @@ impl Db {
             out.push(r.map_err(TermError::Db)?);
         }
         Ok(out)
+    }
+
+    /// 跨分组搜索：匹配档案名、主机、用户或所属分组名。
+    pub fn profile_search(&self, keyword: &str) -> Result<Vec<ProfileRow>> {
+        let kw = keyword.trim().to_lowercase();
+        let all = self.profile_list()?;
+        if kw.is_empty() {
+            return Ok(all);
+        }
+        let groups = self.group_list()?;
+        let group_name = |gid: &Option<String>| -> String {
+            gid.as_ref()
+                .and_then(|id| groups.iter().find(|g| &g.id == id))
+                .map(|g| g.name.to_lowercase())
+                .unwrap_or_default()
+        };
+        Ok(all
+            .into_iter()
+            .filter(|p| {
+                let host = p
+                    .config
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let user = p
+                    .config
+                    .get("user")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                p.name.to_lowercase().contains(&kw)
+                    || host.contains(&kw)
+                    || user.contains(&kw)
+                    || group_name(&p.group_id).contains(&kw)
+            })
+            .collect())
     }
 
     /// 新增或更新档案。`updated_at` 由本地时间决定，`dirty` 置 1 等待推送。
@@ -195,17 +286,19 @@ impl Db {
         p.dirty = true;
         let config_raw = serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
         conn.execute(
-            "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+            "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
              ON CONFLICT(id) DO UPDATE SET
                kind = excluded.kind, name = excluded.name, config = excluded.config,
-               sort_order = excluded.sort_order, updated_at = excluded.updated_at,
-               created_at = excluded.created_at, deleted = excluded.deleted, dirty = 1",
+               group_id = excluded.group_id, sort_order = excluded.sort_order,
+               updated_at = excluded.updated_at, created_at = excluded.created_at,
+               deleted = excluded.deleted, dirty = 1",
             params![
                 p.id,
                 p.kind,
                 p.name,
                 config_raw,
+                p.group_id,
                 p.sort_order,
                 p.updated_at,
                 p.created_at,
@@ -221,6 +314,127 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE profiles SET deleted = 1, dirty = 1, updated_at = ?1 WHERE id = ?2",
+            params![now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    // ---------------- groups ----------------
+
+    pub fn group_list(&self) -> Result<Vec<GroupRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty
+                 FROM groups WHERE deleted = 0 ORDER BY sort_order ASC, name ASC",
+            )
+            .map_err(TermError::Db)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(GroupRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    parent_id: row.get(2)?,
+                    sort_order: row.get(3)?,
+                    collapsed: row.get::<_, i64>(4)? != 0,
+                    updated_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                    deleted: row.get::<_, i64>(7)? != 0,
+                    dirty: row.get::<_, i64>(8)? != 0,
+                })
+            })
+            .map_err(TermError::Db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(TermError::Db)?);
+        }
+        Ok(out)
+    }
+
+    /// 新建分组。返回带时间戳与 dirty 标记的行。
+    pub fn group_create(
+        &self,
+        id: String,
+        name: String,
+        parent_id: Option<String>,
+        sort_order: i64,
+    ) -> Result<GroupRow> {
+        let conn = self.conn.lock().unwrap();
+        if name.trim().is_empty() {
+            return Err(TermError::Other("分组名称不能为空".into()));
+        }
+        let now = now_ms();
+        let g = GroupRow {
+            id,
+            name,
+            parent_id,
+            sort_order,
+            collapsed: false,
+            updated_at: now,
+            created_at: now,
+            deleted: false,
+            dirty: true,
+        };
+        conn.execute(
+            "INSERT INTO groups (id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, 0, 1)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name, parent_id = excluded.parent_id,
+               sort_order = excluded.sort_order, updated_at = excluded.updated_at, dirty = 1",
+            params![g.id, g.name, g.parent_id, g.sort_order, g.updated_at, g.created_at],
+        )
+        .map_err(TermError::Db)?;
+        Ok(g)
+    }
+
+    pub fn group_rename(&self, id: &str, name: String) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if name.trim().is_empty() {
+            return Err(TermError::Other("分组名称不能为空".into()));
+        }
+        conn.execute(
+            "UPDATE groups SET name = ?1, updated_at = ?2, dirty = 1 WHERE id = ?3 AND deleted = 0",
+            params![name, now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    pub fn group_set_collapsed(&self, id: &str, collapsed: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE groups SET collapsed = ?1, updated_at = ?2, dirty = 1 WHERE id = ?3",
+            params![collapsed as i64, now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    /// 删除分组：其子分组与成员档案上移到被删分组的父级，随后软删除该分组（便于同步传播）。
+    pub fn group_delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let parent: Option<String> = conn
+            .query_row(
+                "SELECT parent_id FROM groups WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(TermError::Db)?
+            .flatten();
+        conn.execute(
+            "UPDATE groups SET parent_id = ?1 WHERE parent_id = ?2",
+            params![parent, id],
+        )
+        .map_err(TermError::Db)?;
+        conn.execute(
+            "UPDATE profiles SET group_id = ?1, dirty = 1, updated_at = ?2 WHERE group_id = ?3",
+            params![parent, now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        conn.execute(
+            "UPDATE groups SET deleted = 1, dirty = 1, updated_at = ?1 WHERE id = ?2",
             params![now_ms(), id],
         )
         .map_err(TermError::Db)?;
@@ -270,7 +484,7 @@ impl Db {
         let mut items = Vec::new();
         {
             let mut stmt = conn
-                .prepare("SELECT id, kind, name, config, sort_order, updated_at, deleted FROM profiles WHERE dirty = 1")
+                .prepare("SELECT id, kind, name, config, group_id, sort_order, updated_at, deleted FROM profiles WHERE dirty = 1")
                 .map_err(TermError::Db)?;
             let rows = stmt
                 .query_map([], |row| {
@@ -281,11 +495,39 @@ impl Db {
                         "name": row.get::<_, String>(2)?,
                         "config": serde_json::from_str::<serde_json::Value>(&config_raw)
                             .unwrap_or(serde_json::Value::Null),
-                        "sortOrder": row.get::<_, i64>(4)?,
+                        "group_id": row.get::<_, Option<String>>(4)?,
+                        "sortOrder": row.get::<_, i64>(5)?,
                     });
                     Ok(SyncItem {
                         item_id: row.get(0)?,
                         kind: "profile".into(),
+                        key: None,
+                        data: payload.to_string(),
+                        updated_at: row.get(6)?,
+                        deleted: row.get::<_, i64>(7)? != 0,
+                    })
+                })
+                .map_err(TermError::Db)?;
+            for r in rows {
+                items.push(r.map_err(TermError::Db)?);
+            }
+        }
+        {
+            let mut stmt = conn
+                .prepare("SELECT id, name, parent_id, sort_order, collapsed, updated_at, deleted FROM groups WHERE dirty = 1")
+                .map_err(TermError::Db)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let payload = serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "name": row.get::<_, String>(1)?,
+                        "parentId": row.get::<_, Option<String>>(2)?,
+                        "sortOrder": row.get::<_, i64>(3)?,
+                        "collapsed": row.get::<_, i64>(4)? != 0,
+                    });
+                    Ok(SyncItem {
+                        item_id: row.get(0)?,
+                        kind: "group".into(),
                         key: None,
                         data: payload.to_string(),
                         updated_at: row.get(5)?,
@@ -348,6 +590,7 @@ impl Db {
                         .get("sortOrder")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
+                    let group_id = payload.get("group_id").and_then(|v| v.as_str()).map(String::from);
                     let local_updated: Option<i64> = conn
                         .query_row(
                             "SELECT updated_at FROM profiles WHERE id = ?1",
@@ -364,12 +607,60 @@ impl Db {
                     let config_raw = config.to_string();
                     let created = local_updated.map_or(now_ms(), |_| 0);
                     conn.execute(
-                        "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
+                        "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
+                         ON CONFLICT(id) DO UPDATE SET
+                           kind = ?2, name = ?3, config = ?4, group_id = ?5, sort_order = ?6,
+                           updated_at = ?7, deleted = ?9, dirty = 0",
+                        params![id, kind, name, config_raw, group_id, sort_order, item.updated_at, created, item.deleted as i64],
+                    )
+                    .map_err(TermError::Db)?;
+                    applied += 1;
+                }
+                "group" => {
+                    let payload: serde_json::Value = match serde_json::from_str(&item.data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let id = item.item_id.clone();
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("未命名")
+                        .to_string();
+                    let parent_id = payload
+                        .get("parentId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let sort_order = payload
+                        .get("sortOrder")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let collapsed = payload
+                        .get("collapsed")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let local_updated: Option<i64> = conn
+                        .query_row(
+                            "SELECT updated_at FROM groups WHERE id = ?1",
+                            params![id],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(TermError::Db)?;
+                    if let Some(t) = local_updated {
+                        if t >= item.updated_at {
+                            continue;
+                        }
+                    }
+                    let created = local_updated.map_or(now_ms(), |_| 0);
+                    conn.execute(
+                        "INSERT INTO groups (id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)
                          ON CONFLICT(id) DO UPDATE SET
-                           kind = ?2, name = ?3, config = ?4, sort_order = ?5,
+                           name = ?2, parent_id = ?3, sort_order = ?4, collapsed = ?5,
                            updated_at = ?6, deleted = ?8, dirty = 0",
-                        params![id, kind, name, config_raw, sort_order, item.updated_at, created, item.deleted as i64],
+                        params![id, name, parent_id, sort_order, collapsed as i64, item.updated_at, created, item.deleted as i64],
                     )
                     .map_err(TermError::Db)?;
                     applied += 1;
@@ -417,6 +708,13 @@ impl Db {
                     )
                     .map_err(TermError::Db)?;
                 }
+                "group" => {
+                    conn.execute(
+                        "UPDATE groups SET dirty = 0 WHERE id = ?1 AND updated_at <= ?2",
+                        params![item.item_id, item.updated_at],
+                    )
+                    .map_err(TermError::Db)?;
+                }
                 "setting" => {
                     if let Some(key) = &item.key {
                         conn.execute(
@@ -458,13 +756,15 @@ impl Db {
 
     // ---------------- 本地备份 ----------------
 
-    /// 导出全部档案与设置为 JSON 备份文件。
+    /// 导出全部档案、分组与设置为 JSON 备份文件。
     /// 注意：系统密钥环中的机密（SSH 密码/口令）不会包含在备份里。
     pub fn backup_export(&self, path: &std::path::Path) -> Result<BackupStats> {
         let profiles = self.profile_list()?;
+        let groups = self.group_list()?;
         let settings = self.settings_all()?;
         let stats = BackupStats {
             profiles: profiles.len() as u32,
+            groups: groups.len() as u32,
             settings: settings.len() as u32,
         };
         let file = BackupFile {
@@ -473,6 +773,7 @@ impl Db {
             version: BACKUP_VERSION,
             exported_at: now_ms(),
             profiles: &profiles,
+            groups: &groups,
             settings: &settings,
         };
         let json =
@@ -483,7 +784,7 @@ impl Db {
 
     /// 从备份文件导入。
     /// - `replace = false`：合并模式，按 LWW 只接受比本地更新的数据，保留本地新增；
-    /// - `replace = true`：清空现有档案与设置后整体恢复。
+    /// - `replace = true`：清空现有档案、分组与设置后整体恢复。
     /// 导入的数据标记 dirty，以便后续登录云同步时推送到服务端。
     pub fn backup_import(&self, path: &std::path::Path, replace: bool) -> Result<BackupStats> {
         let raw = std::fs::read_to_string(path).map_err(TermError::Io)?;
@@ -492,22 +793,32 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let now = now_ms();
         if replace {
-            conn.execute_batch("DELETE FROM profiles; DELETE FROM settings;")
+            conn.execute_batch("DELETE FROM profiles; DELETE FROM groups; DELETE FROM settings;")
                 .map_err(TermError::Db)?;
         }
         let mut profiles_count = 0u32;
+        let mut groups_count = 0u32;
         let mut settings_count = 0u32;
         if replace {
             for p in &file.profiles {
                 let config_raw =
                     serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
                 conn.execute(
-                    "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
-                    params![p.id, p.kind, p.name, config_raw, p.sort_order, now, now, 0i64],
+                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
+                    params![p.id, p.kind, p.name, config_raw, p.group_id, p.sort_order, now, now, 0i64],
                 )
                 .map_err(TermError::Db)?;
                 profiles_count += 1;
+            }
+            for g in &file.groups {
+                conn.execute(
+                    "INSERT INTO groups (id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                    params![g.id, g.name, g.parent_id, g.sort_order, g.collapsed as i64, now, now, 0i64],
+                )
+                .map_err(TermError::Db)?;
+                groups_count += 1;
             }
             for s in &file.settings {
                 conn.execute(
@@ -534,16 +845,17 @@ impl Db {
                 let config_raw =
                     serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
                 conn.execute(
-                    "INSERT INTO profiles (id, kind, name, config, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
                      ON CONFLICT(id) DO UPDATE SET
-                       kind = ?2, name = ?3, config = ?4, sort_order = ?5,
-                       updated_at = ?6, deleted = ?8, dirty = 1",
+                       kind = ?2, name = ?3, config = ?4, group_id = ?5, sort_order = ?6,
+                       updated_at = ?7, deleted = ?9, dirty = 1",
                     params![
                         p.id,
                         p.kind,
                         p.name,
                         config_raw,
+                        p.group_id,
                         p.sort_order,
                         p.updated_at,
                         p.created_at,
@@ -552,6 +864,38 @@ impl Db {
                 )
                 .map_err(TermError::Db)?;
                 profiles_count += 1;
+            }
+            for g in &file.groups {
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT updated_at FROM groups WHERE id = ?1",
+                        params![g.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(TermError::Db)?;
+                if existing.map_or(false, |t| t >= g.updated_at) {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT INTO groups (id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+                     ON CONFLICT(id) DO UPDATE SET
+                       name = ?2, parent_id = ?3, sort_order = ?4, collapsed = ?5,
+                       updated_at = ?6, deleted = ?8, dirty = 1",
+                    params![
+                        g.id,
+                        g.name,
+                        g.parent_id,
+                        g.sort_order,
+                        g.collapsed as i64,
+                        g.updated_at,
+                        g.created_at,
+                        g.deleted as i64
+                    ],
+                )
+                .map_err(TermError::Db)?;
+                groups_count += 1;
             }
             for s in &file.settings {
                 let existing: Option<i64> = conn
@@ -576,6 +920,7 @@ impl Db {
         }
         Ok(BackupStats {
             profiles: profiles_count,
+            groups: groups_count,
             settings: settings_count,
         })
     }
@@ -590,26 +935,32 @@ mod tests {
         Db::open_at(path).unwrap()
     }
 
-    #[test]
-    fn profile_roundtrip() {
-        let db = tmp_db();
-        let p = ProfileRow {
-            id: uuid::Uuid::new_v4().to_string(),
+    fn sample_profile(id: &str, group_id: Option<&str>) -> ProfileRow {
+        ProfileRow {
+            id: id.into(),
             kind: "ssh".into(),
-            name: "test".into(),
+            name: id.to_string(),
             config: serde_json::json!({ "host": "example.com", "port": 22 }),
+            group_id: group_id.map(String::from),
             sort_order: 0,
             updated_at: 0,
             created_at: 0,
             deleted: false,
             dirty: false,
-        };
-        let saved = db.profile_save(p).unwrap();
+        }
+    }
+
+    #[test]
+    fn profile_roundtrip() {
+        let db = tmp_db();
+        let p = sample_profile("p1", None);
+        let saved = db.profile_save(p.clone()).unwrap();
         assert!(saved.dirty);
         assert!(saved.updated_at > 0);
 
         let list = db.profile_list().unwrap();
         assert_eq!(list.len(), 1);
+        assert_eq!(list[0].group_id, None);
         assert_eq!(list[0].config["host"], "example.com");
 
         db.profile_delete(&saved.id).unwrap();
@@ -660,18 +1011,7 @@ mod tests {
     fn backup_roundtrip() {
         let db = tmp_db();
         db.setting_set("theme", "nord").unwrap();
-        let p = ProfileRow {
-            id: "p1".into(),
-            kind: "ssh".into(),
-            name: "srv".into(),
-            config: serde_json::json!({ "host": "example.com" }),
-            sort_order: 0,
-            updated_at: 0,
-            created_at: 0,
-            deleted: false,
-            dirty: false,
-        };
-        db.profile_save(p).unwrap();
+        db.profile_save(sample_profile("p1", None)).unwrap();
 
         let path = std::env::temp_dir().join(format!("termone-bk-{}.json", uuid::Uuid::new_v4()));
         let stats = db.backup_export(&path).unwrap();
@@ -683,7 +1023,7 @@ mod tests {
         let st = db2.backup_import(&path, true).unwrap();
         assert_eq!(st.profiles, 1);
         assert_eq!(st.settings, 1);
-        assert_eq!(db2.profile_list().unwrap()[0].name, "srv");
+        assert_eq!(db2.profile_list().unwrap()[0].name, "p1");
         assert_eq!(db2.settings_all().unwrap()[0].value, "nord");
 
         // 合并模式：本地数据更新时拒绝备份中的旧数据
@@ -691,5 +1031,148 @@ mod tests {
         let st2 = db2.backup_import(&path, false).unwrap();
         assert_eq!(st2.settings, 0);
         assert_eq!(db2.settings_all().unwrap()[0].value, "midnight");
+    }
+
+    // ---------------- R-02 连接分组 / 会话树 ----------------
+
+    #[test]
+    fn group_crud_and_persistence() {
+        let db = tmp_db();
+        let g = db
+            .group_create("g1".into(), "生产环境".into(), None, 0)
+            .unwrap();
+        assert!(g.dirty);
+        assert!(!g.collapsed);
+        assert_eq!(db.group_list().unwrap().len(), 1);
+
+        db.group_rename("g1", "Prod".to_string()).unwrap();
+        db.group_set_collapsed("g1", true).unwrap();
+        let g2 = db.group_list().unwrap();
+        assert_eq!(g2[0].name, "Prod");
+        assert!(g2[0].collapsed);
+
+        // 空名称拒绝
+        assert!(db.group_create("g2".into(), "   ".into(), None, 1).is_err());
+        assert!(db.group_rename("g1", "  ".into()).is_err());
+    }
+
+    #[test]
+    fn group_nesting_and_delete_reparents() {
+        let db = tmp_db();
+        db.group_create("root".into(), "Root".into(), None, 0).unwrap();
+        db.group_create("child".into(), "Child".into(), Some("root".into()), 1).unwrap();
+        db.profile_save(sample_profile("p1", Some("child"))).unwrap();
+
+        // 删除父分组后，子分组与成员档案上移到顶层（None）
+        db.group_delete("root").unwrap();
+        let groups = db.group_list().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].id, "child");
+        // 子分组的父级上移到顶层（None）
+        assert_eq!(groups[0].parent_id, None);
+        // 成员档案仅在所属分组被删除时才上移；p1 属于 child，不受影响
+        assert_eq!(db.profile_list().unwrap()[0].group_id, Some("child".to_string()));
+
+        // 直接隶属于被删分组的成员档案上移到顶层
+        db.profile_save(sample_profile("p_root", Some("root"))).unwrap();
+        db.group_create("top".into(), "Top".into(), None, 2).unwrap();
+        db.profile_save(sample_profile("p_top", Some("top"))).unwrap();
+        db.group_delete("top").unwrap();
+        let still_in_top = db
+            .profile_list()
+            .unwrap()
+            .iter()
+            .any(|p| p.group_id.as_deref() == Some("top"));
+        assert!(!still_in_top, "被删分组的直接成员应上移到顶层");
+
+        // 软删除后导出包含 deleted 标记
+        let dirty = db.sync_export_dirty().unwrap();
+        assert!(dirty.iter().any(|i| i.kind == "group" && i.item_id == "root" && i.deleted));
+    }
+
+    #[test]
+    fn profile_grouping_and_search_cross_group() {
+        let db = tmp_db();
+        db.group_create("web".into(), "Web".into(), None, 0).unwrap();
+        db.group_create("db".into(), "Database".into(), None, 1).unwrap();
+        db.profile_save(sample_profile("web-1", Some("web"))).unwrap();
+        let mut dbp = sample_profile("db-1", Some("db"));
+        dbp.config = serde_json::json!({ "host": "10.0.0.5", "user": "admin" });
+        db.profile_save(dbp).unwrap();
+
+        // 分组内档案正确归属
+        let web = db.profile_search("web-1").unwrap();
+        assert_eq!(web.len(), 1);
+        assert_eq!(web[0].group_id.as_deref(), Some("web"));
+
+        // 跨分组按主机/用户检索
+        assert_eq!(db.profile_search("10.0.0.5").unwrap().len(), 1);
+        assert_eq!(db.profile_search("admin").unwrap().len(), 1);
+        // 按分组名检索
+        assert_eq!(db.profile_search("database").unwrap().len(), 1);
+        // 空关键字返回全部
+        assert_eq!(db.profile_search("").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn group_sync_lww_and_backup() {
+        let db = tmp_db();
+        let g = db
+            .group_create("g1".into(), "G1".into(), None, 0)
+            .unwrap();
+        // 导出 dirty 分组
+        let dirty = db.sync_export_dirty().unwrap();
+        let gitem = dirty.iter().find(|i| i.kind == "group").unwrap();
+        assert_eq!(gitem.item_id, "g1");
+        db.sync_mark_pushed(&dirty).unwrap();
+        assert!(db.sync_export_dirty().unwrap().is_empty());
+
+        // 远端更旧的分组不覆盖本地
+        let older = SyncItem {
+            item_id: "g1".into(),
+            kind: "group".into(),
+            key: None,
+            data: serde_json::json!({
+                "name": "STALE", "parentId": null, "sortOrder": 0, "collapsed": false
+            })
+            .to_string(),
+            updated_at: g.updated_at - 1000,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[older]).unwrap(), 0);
+        assert_eq!(db.group_list().unwrap()[0].name, "G1");
+
+        // 远端更新的分组覆盖本地
+        let newer = SyncItem {
+            item_id: "g1".into(),
+            kind: "group".into(),
+            key: None,
+            data: serde_json::json!({
+                "name": "G1-new", "parentId": null, "sortOrder": 0, "collapsed": true
+            })
+            .to_string(),
+            updated_at: g.updated_at + 1000,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[newer]).unwrap(), 1);
+        let gl = db.group_list().unwrap();
+        assert_eq!(gl[0].name, "G1-new");
+        assert!(gl[0].collapsed);
+
+        // 备份包含分组并可在另一库恢复
+        let path = std::env::temp_dir().join(format!("termone-bk-{}.json", uuid::Uuid::new_v4()));
+        let st = db.backup_export(&path).unwrap();
+        assert_eq!(st.groups, 1);
+        let db2 = tmp_db();
+        let st2 = db2.backup_import(&path, true).unwrap();
+        assert_eq!(st2.groups, 1);
+        assert_eq!(db2.group_list().unwrap()[0].name, "G1-new");
+    }
+
+    #[test]
+    fn group_unicode_name() {
+        let db = tmp_db();
+        db.group_create("g1".into(), "北京☁服务器组".into(), None, 0).unwrap();
+        assert_eq!(db.group_list().unwrap()[0].name, "北京☁服务器组");
     }
 }
