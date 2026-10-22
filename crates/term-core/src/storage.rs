@@ -1693,11 +1693,53 @@ mod tests {
         // touch 不应触发云同步（last_used_at 为本地使用记录）
         let db = tmp_db();
         db.profile_save(sample_profile("a", None)).unwrap();
-        db.sync_mark_pushed(
-            &db.sync_export_dirty().unwrap(),
-        )
-        .unwrap();
+        db.sync_mark_pushed(&db.sync_export_dirty().unwrap()).unwrap();
         db.profile_touch("a").unwrap();
         assert!(db.sync_export_dirty().unwrap().is_empty());
+    }
+
+    // ---------------- P4/P5 边界与回归 ----------------
+
+    #[test]
+    fn boundary_corrupt_backup_rejected() {
+        let db = tmp_db();
+        let path = std::env::temp_dir().join(format!("termone-bad-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "not valid json {{{").unwrap();
+        assert!(db.backup_import(&path, true).is_err());
+    }
+
+    #[test]
+    fn boundary_empty_sync_is_noop() {
+        let db = tmp_db();
+        assert_eq!(db.sync_apply_pull(&[]).unwrap(), 0);
+        assert!(db.sync_export_dirty().unwrap().is_empty());
+    }
+
+    #[test]
+    fn boundary_search_empty_keyword_returns_all() {
+        let db = tmp_db();
+        db.profile_save(sample_profile("alpha", None)).unwrap();
+        db.profile_save(sample_profile("beta", None)).unwrap();
+        assert_eq!(db.profile_search("").unwrap().len(), 2);
+        assert_eq!(db.profile_search("   ").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn boundary_lww_tie_not_applied() {
+        // RK-04：并发同名更新，相等时间戳不覆盖本地（避免丢数据）
+        let db = tmp_db();
+        let item = SyncItem {
+            item_id: "p1".into(),
+            kind: "profile".into(),
+            key: None,
+            data: serde_json::json!({ "kind": "ssh", "name": "remote", "config": {}, "sortOrder": 0 }).to_string(),
+            updated_at: 1000,
+            deleted: false,
+        };
+        // 首次下发建立本地副本
+        assert_eq!(db.sync_apply_pull(&[item.clone()]).unwrap(), 1);
+        // 相同时间戳再次下发：不应覆盖
+        assert_eq!(db.sync_apply_pull(&[item]).unwrap(), 0);
+        assert_eq!(db.profile_list().unwrap()[0].name, "remote");
     }
 }
