@@ -12,4 +12,4 @@ pub use session::{
     default_shell, list_ports, list_shells, ExitSink, OutputSink, PortInfo, ShellInfo,
     SessionId, SessionInfo, SessionKind, SessionManager, SessionRequest, SshAuth,
 };
-pub use storage::{BackupStats, Db, GroupRow, ProfileRow, SettingRow, SyncItem};
+pub use storage::{BackupStats, Db, GroupRow, ProfileRow, SettingRow, SnippetRow, SyncItem};

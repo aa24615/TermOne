@@ -57,6 +57,19 @@ pub struct GroupRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SnippetRow {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub sort_order: i64,
+    pub updated_at: i64,
+    pub created_at: i64,
+    pub deleted: bool,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingRow {
     pub key: String,
     pub value: String,
@@ -86,6 +99,7 @@ pub struct SyncItem {
 pub struct BackupStats {
     pub profiles: u32,
     pub groups: u32,
+    pub snippets: u32,
     pub settings: u32,
 }
 
@@ -101,6 +115,7 @@ struct BackupFile<'a> {
     exported_at: i64,
     profiles: &'a [ProfileRow],
     groups: &'a [GroupRow],
+    snippets: &'a [SnippetRow],
     settings: &'a [SettingRow],
 }
 
@@ -111,6 +126,8 @@ struct BackupFileOwned {
     profiles: Vec<ProfileRow>,
     #[serde(default)]
     groups: Vec<GroupRow>,
+    #[serde(default)]
+    snippets: Vec<SnippetRow>,
     #[serde(default)]
     settings: Vec<SettingRow>,
 }
@@ -143,6 +160,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL,
+    dirty      INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS snippets (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0,
     dirty      INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -320,6 +347,95 @@ impl Db {
         Ok(())
     }
 
+    fn profile_exists(&self, id: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap_or(0);
+        n > 0
+    }
+
+    /// 把 Shell 路径整理成稳定的档案 ID 片段。
+    fn slugify_path(path: &str) -> String {
+        path.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    }
+
+    /// 根据 Shell 信息推断一个干净的默认档案名（cmd → "cmd"）。
+    fn shell_default_name(sh: &crate::session::ShellInfo) -> String {
+        let p = sh.path.to_lowercase();
+        if p.ends_with("cmd.exe") || p == "cmd" {
+            "cmd".into()
+        } else if p.contains("git") && p.contains("bash") {
+            "Git Bash".into()
+        } else if p.contains("pwsh") {
+            "PowerShell 7".into()
+        } else if p.contains("powershell") {
+            "PowerShell".into()
+        } else if p.contains("nu.exe") || p.ends_with("nu") {
+            "Nushell".into()
+        } else if p.contains("wsl") {
+            "WSL".into()
+        } else if let Some(stem) = std::path::Path::new(&sh.path).file_stem() {
+            stem.to_string_lossy().into_owned()
+        } else {
+            sh.name.clone()
+        }
+    }
+
+    /// 首次启动时，为系统自带 Shell（CMD / Git Bash / PowerShell 等）初始化默认档案，
+    /// 并归入「系统终端」分组，做到开箱即用。幂等：分组已存在则跳过。
+    pub fn seed_system_profiles(&self) -> Result<()> {
+        {
+            let conn = self.conn.lock().unwrap();
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM groups WHERE id = 'system' AND deleted = 0",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(TermError::Db)?;
+            if exists > 0 {
+                return Ok(());
+            }
+        }
+
+        self.group_create("system".into(), "系统终端".into(), None, 0)?;
+
+        let shells = crate::session::list_shells();
+        let mut sort = 0i64;
+        for sh in shells {
+            // 跳过「默认 Shell」占位项（其路径会与具体 Shell 重复）
+            if sh.name.contains("默认") {
+                continue;
+            }
+            let id = format!("seed://{}", Self::slugify_path(&sh.path));
+            if self.profile_exists(&id) {
+                continue;
+            }
+            let profile = ProfileRow {
+                id,
+                kind: "local".into(),
+                name: Self::shell_default_name(&sh),
+                config: serde_json::json!({
+                    "shell": sh.path,
+                    "args": [],
+                    "preset": if sh.preset == "wsl" { "wsl" } else { "shell" },
+                }),
+                group_id: Some("system".into()),
+                sort_order: sort,
+                updated_at: 0,
+                created_at: 0,
+                deleted: false,
+                dirty: true,
+            };
+            self.profile_save(profile)?;
+            sort += 1;
+        }
+        Ok(())
+    }
+
     // ---------------- groups ----------------
 
     pub fn group_list(&self) -> Result<Vec<GroupRow>> {
@@ -435,6 +551,80 @@ impl Db {
         .map_err(TermError::Db)?;
         conn.execute(
             "UPDATE groups SET deleted = 1, dirty = 1, updated_at = ?1 WHERE id = ?2",
+            params![now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    // ---------------- snippets ----------------
+
+    pub fn snippet_list(&self) -> Result<Vec<SnippetRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, body, sort_order, updated_at, created_at, deleted, dirty
+                 FROM snippets WHERE deleted = 0 ORDER BY sort_order ASC, title ASC",
+            )
+            .map_err(TermError::Db)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SnippetRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    body: row.get(2)?,
+                    sort_order: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    created_at: row.get(5)?,
+                    deleted: row.get::<_, i64>(6)? != 0,
+                    dirty: row.get::<_, i64>(7)? != 0,
+                })
+            })
+            .map_err(TermError::Db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(TermError::Db)?);
+        }
+        Ok(out)
+    }
+
+    /// 新增或更新片段。返回带时间戳与 dirty 标记的行。
+    pub fn snippet_save(&self, mut s: SnippetRow) -> Result<SnippetRow> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT created_at FROM snippets WHERE id = ?1",
+                params![s.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(TermError::Db)?;
+        let now = now_ms();
+        s.created_at = match existing {
+            Some(created) => created,
+            None if s.created_at > 0 => s.created_at,
+            None => now,
+        };
+        s.updated_at = now;
+        s.dirty = true;
+        conn.execute(
+            "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+             ON CONFLICT(id) DO UPDATE SET
+               title = excluded.title, body = excluded.body, sort_order = excluded.sort_order,
+               updated_at = excluded.updated_at, created_at = excluded.created_at,
+               deleted = excluded.deleted, dirty = 1",
+            params![s.id, s.title, s.body, s.sort_order, s.updated_at, s.created_at, s.deleted as i64],
+        )
+        .map_err(TermError::Db)?;
+        Ok(s)
+    }
+
+    /// 软删除片段（保留行用于同步传播删除）。
+    pub fn snippet_delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE snippets SET deleted = 1, dirty = 1, updated_at = ?1 WHERE id = ?2",
             params![now_ms(), id],
         )
         .map_err(TermError::Db)?;
@@ -560,6 +750,32 @@ impl Db {
                 items.push(r.map_err(TermError::Db)?);
             }
         }
+        {
+            let mut stmt = conn
+                .prepare("SELECT id, title, body, sort_order, updated_at, deleted FROM snippets WHERE dirty = 1")
+                .map_err(TermError::Db)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let payload = serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "title": row.get::<_, String>(1)?,
+                        "body": row.get::<_, String>(2)?,
+                        "sortOrder": row.get::<_, i64>(3)?,
+                    });
+                    Ok(SyncItem {
+                        item_id: row.get(0)?,
+                        kind: "snippet".into(),
+                        key: None,
+                        data: payload.to_string(),
+                        updated_at: row.get(4)?,
+                        deleted: row.get::<_, i64>(5)? != 0,
+                    })
+                })
+                .map_err(TermError::Db)?;
+            for r in rows {
+                items.push(r.map_err(TermError::Db)?);
+            }
+        }
         Ok(items)
     }
 
@@ -665,6 +881,50 @@ impl Db {
                     .map_err(TermError::Db)?;
                     applied += 1;
                 }
+                "snippet" => {
+                    let payload: serde_json::Value = match serde_json::from_str(&item.data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let id = item.item_id.clone();
+                    let title = payload
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("未命名")
+                        .to_string();
+                    let body = payload
+                        .get("body")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let sort_order = payload
+                        .get("sortOrder")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let local_updated: Option<i64> = conn
+                        .query_row(
+                            "SELECT updated_at FROM snippets WHERE id = ?1",
+                            params![id],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(TermError::Db)?;
+                    if let Some(t) = local_updated {
+                        if t >= item.updated_at {
+                            continue;
+                        }
+                    }
+                    let created = local_updated.map_or(now_ms(), |_| 0);
+                    conn.execute(
+                        "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+                         ON CONFLICT(id) DO UPDATE SET
+                           title = ?2, body = ?3, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 0",
+                        params![id, title, body, sort_order, item.updated_at, created, item.deleted as i64],
+                    )
+                    .map_err(TermError::Db)?;
+                    applied += 1;
+                }
                 "setting" => {
                     let Some(key) = item.key.clone() else {
                         continue;
@@ -715,6 +975,13 @@ impl Db {
                     )
                     .map_err(TermError::Db)?;
                 }
+                "snippet" => {
+                    conn.execute(
+                        "UPDATE snippets SET dirty = 0 WHERE id = ?1 AND updated_at <= ?2",
+                        params![item.item_id, item.updated_at],
+                    )
+                    .map_err(TermError::Db)?;
+                }
                 "setting" => {
                     if let Some(key) = &item.key {
                         conn.execute(
@@ -761,10 +1028,12 @@ impl Db {
     pub fn backup_export(&self, path: &std::path::Path) -> Result<BackupStats> {
         let profiles = self.profile_list()?;
         let groups = self.group_list()?;
+        let snippets = self.snippet_list()?;
         let settings = self.settings_all()?;
         let stats = BackupStats {
             profiles: profiles.len() as u32,
             groups: groups.len() as u32,
+            snippets: snippets.len() as u32,
             settings: settings.len() as u32,
         };
         let file = BackupFile {
@@ -774,6 +1043,7 @@ impl Db {
             exported_at: now_ms(),
             profiles: &profiles,
             groups: &groups,
+            snippets: &snippets,
             settings: &settings,
         };
         let json =
@@ -793,11 +1063,14 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let now = now_ms();
         if replace {
-            conn.execute_batch("DELETE FROM profiles; DELETE FROM groups; DELETE FROM settings;")
-                .map_err(TermError::Db)?;
+            conn.execute_batch(
+                "DELETE FROM profiles; DELETE FROM groups; DELETE FROM snippets; DELETE FROM settings;",
+            )
+            .map_err(TermError::Db)?;
         }
         let mut profiles_count = 0u32;
         let mut groups_count = 0u32;
+        let mut snippets_count = 0u32;
         let mut settings_count = 0u32;
         if replace {
             for p in &file.profiles {
@@ -819,6 +1092,15 @@ impl Db {
                 )
                 .map_err(TermError::Db)?;
                 groups_count += 1;
+            }
+            for s in &file.snippets {
+                conn.execute(
+                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![s.id, s.title, s.body, s.sort_order, now, now, 0i64, 1i64],
+                )
+                .map_err(TermError::Db)?;
+                snippets_count += 1;
             }
             for s in &file.settings {
                 conn.execute(
@@ -897,6 +1179,36 @@ impl Db {
                 .map_err(TermError::Db)?;
                 groups_count += 1;
             }
+            for s in &file.snippets {
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT updated_at FROM snippets WHERE id = ?1",
+                        params![s.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(TermError::Db)?;
+                if existing.map_or(false, |t| t >= s.updated_at) {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+                     ON CONFLICT(id) DO UPDATE SET
+                       title = ?2, body = ?3, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 1",
+                    params![
+                        s.id,
+                        s.title,
+                        s.body,
+                        s.sort_order,
+                        s.updated_at,
+                        s.created_at,
+                        s.deleted as i64
+                    ],
+                )
+                .map_err(TermError::Db)?;
+                snippets_count += 1;
+            }
             for s in &file.settings {
                 let existing: Option<i64> = conn
                     .query_row(
@@ -921,6 +1233,7 @@ impl Db {
         Ok(BackupStats {
             profiles: profiles_count,
             groups: groups_count,
+            snippets: snippets_count,
             settings: settings_count,
         })
     }
@@ -1174,5 +1487,126 @@ mod tests {
         let db = tmp_db();
         db.group_create("g1".into(), "北京☁服务器组".into(), None, 0).unwrap();
         assert_eq!(db.group_list().unwrap()[0].name, "北京☁服务器组");
+    }
+
+    // ---------------- R-07 常用命令 Snippets 片段库 ----------------
+
+    fn sample_snippet(id: &str, title: &str, body: &str) -> SnippetRow {
+        SnippetRow {
+            id: id.into(),
+            title: title.into(),
+            body: body.into(),
+            sort_order: 0,
+            updated_at: 0,
+            created_at: 0,
+            deleted: false,
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn snippet_crud_and_dirty() {
+        let db = tmp_db();
+        let saved = db.snippet_save(sample_snippet("s1", "部署", "kubectl apply -f ")).unwrap();
+        assert!(saved.dirty);
+        assert!(saved.updated_at > 0);
+        let list = db.snippet_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].title, "部署");
+        assert_eq!(list[0].body, "kubectl apply -f ");
+
+        // 软删除后列表不再包含
+        db.snippet_delete("s1").unwrap();
+        assert!(db.snippet_list().unwrap().is_empty());
+        // 但同步导出仍包含已删除项，用于向其他设备传播删除
+        let dirty = db.sync_export_dirty().unwrap();
+        assert!(dirty.iter().any(|i| i.kind == "snippet" && i.item_id == "s1" && i.deleted));
+    }
+
+    #[test]
+    fn snippet_export_mark_pushed() {
+        let db = tmp_db();
+        db.snippet_save(sample_snippet("s1", "v1", "echo 1")).unwrap();
+        let dirty = db.sync_export_dirty().unwrap();
+        assert_eq!(dirty.iter().filter(|i| i.kind == "snippet").count(), 1);
+        db.sync_mark_pushed(&dirty).unwrap();
+        assert!(db.sync_export_dirty().unwrap().is_empty());
+    }
+
+    #[test]
+    fn snippet_sync_lww() {
+        let db = tmp_db();
+        // 通过 pull 以受控时间戳建立基线（updated_at=1000）
+        let base = SyncItem {
+            item_id: "s1".into(),
+            kind: "snippet".into(),
+            key: None,
+            data: serde_json::json!({ "title": "base", "body": "echo base", "sortOrder": 0 }).to_string(),
+            updated_at: 1000,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[base.clone()]).unwrap(), 1);
+        assert_eq!(db.snippet_list().unwrap()[0].title, "base");
+
+        // 远端更旧不覆盖本地
+        let older = SyncItem {
+            item_id: "s1".into(),
+            kind: "snippet".into(),
+            key: None,
+            data: serde_json::json!({ "title": "OLD", "body": "echo 0", "sortOrder": 0 }).to_string(),
+            updated_at: 500,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[older]).unwrap(), 0);
+        assert_eq!(db.snippet_list().unwrap()[0].title, "base");
+
+        // 远端更新覆盖本地
+        let newer = SyncItem {
+            item_id: "s1".into(),
+            kind: "snippet".into(),
+            key: None,
+            data: serde_json::json!({ "title": "v2", "body": "echo 2", "sortOrder": 0 }).to_string(),
+            updated_at: 2000,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[newer]).unwrap(), 1);
+        let s = db.snippet_list().unwrap();
+        assert_eq!(s[0].title, "v2");
+        assert_eq!(s[0].body, "echo 2");
+
+        // 远端删除传播
+        let del = SyncItem {
+            item_id: "s1".into(),
+            kind: "snippet".into(),
+            key: None,
+            data: serde_json::json!({ "title": "v2", "body": "echo 2", "sortOrder": 0 }).to_string(),
+            updated_at: 3000,
+            deleted: true,
+        };
+        assert_eq!(db.sync_apply_pull(&[del]).unwrap(), 1);
+        assert!(db.snippet_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn snippet_backup_roundtrip_and_unicode() {
+        let db = tmp_db();
+        let big = "🚀\n".repeat(500);
+        db.snippet_save(sample_snippet("s1", "大段脚本", &big)).unwrap();
+        let path = std::env::temp_dir().join(format!("termone-bk-{}.json", uuid::Uuid::new_v4()));
+        let st = db.backup_export(&path).unwrap();
+        assert_eq!(st.snippets, 1);
+
+        let db2 = tmp_db();
+        let st2 = db2.backup_import(&path, true).unwrap();
+        assert_eq!(st2.snippets, 1);
+        let restored = db2.snippet_list().unwrap();
+        assert_eq!(restored[0].title, "大段脚本");
+        assert_eq!(restored[0].body, "🚀\n".repeat(500));
+
+        // 合并模式：本地更新片段不被旧备份覆盖
+        db2.snippet_save(sample_snippet("s1", "本地新", "local")).unwrap();
+        let st3 = db2.backup_import(&path, false).unwrap();
+        assert_eq!(st3.snippets, 0);
+        assert_eq!(db2.snippet_list().unwrap()[0].title, "本地新");
     }
 }
