@@ -34,6 +34,8 @@ pub struct ProfileRow {
     pub config: serde_json::Value,
     #[serde(default)]
     pub group_id: Option<String>,
+    #[serde(default)]
+    pub last_used_at: i64,
     pub sort_order: i64,
     pub updated_at: i64,
     pub created_at: i64,
@@ -142,6 +144,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     sort_order INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL DEFAULT 0,
     deleted    INTEGER NOT NULL DEFAULT 0,
     dirty      INTEGER NOT NULL DEFAULT 1
 );
@@ -214,6 +217,7 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA).map_err(TermError::Db)?;
         ensure_column(&conn, "profiles", "group_id", "TEXT")?;
+        ensure_column(&conn, "profiles", "last_used_at", "INTEGER NOT NULL DEFAULT 0")?;
         let db = Db {
             conn: Mutex::new(conn),
         };
@@ -226,7 +230,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, kind, name, config, sort_order, group_id, updated_at, created_at, deleted, dirty
+                "SELECT id, kind, name, config, sort_order, group_id, updated_at, created_at, last_used_at, deleted, dirty
                  FROM profiles WHERE deleted = 0
                  ORDER BY sort_order ASC, name ASC",
             )
@@ -243,8 +247,9 @@ impl Db {
                     sort_order: row.get(4)?,
                     updated_at: row.get(6)?,
                     created_at: row.get(7)?,
-                    deleted: row.get::<_, i64>(8)? != 0,
-                    dirty: row.get::<_, i64>(9)? != 0,
+                    last_used_at: row.get(8)?,
+                    deleted: row.get::<_, i64>(9)? != 0,
+                    dirty: row.get::<_, i64>(10)? != 0,
                 })
             })
             .map_err(TermError::Db)?;
@@ -313,13 +318,13 @@ impl Db {
         p.dirty = true;
         let config_raw = serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
         conn.execute(
-            "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+            "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, last_used_at, deleted, dirty)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
              ON CONFLICT(id) DO UPDATE SET
                kind = excluded.kind, name = excluded.name, config = excluded.config,
                group_id = excluded.group_id, sort_order = excluded.sort_order,
                updated_at = excluded.updated_at, created_at = excluded.created_at,
-               deleted = excluded.deleted, dirty = 1",
+               last_used_at = excluded.last_used_at, deleted = excluded.deleted, dirty = 1",
             params![
                 p.id,
                 p.kind,
@@ -329,6 +334,7 @@ impl Db {
                 p.sort_order,
                 p.updated_at,
                 p.created_at,
+                p.last_used_at,
                 p.deleted as i64
             ],
         )
@@ -345,6 +351,31 @@ impl Db {
         )
         .map_err(TermError::Db)?;
         Ok(())
+    }
+
+    /// 记录一次会话使用，更新最近使用时间戳。
+    /// 注意：touch 不置 dirty，避免把本地使用记录误触发云同步。
+    pub fn profile_touch(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE profiles SET last_used_at = ?1 WHERE id = ?2",
+            params![now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    /// 最近使用过的档案（last_used_at > 0），按使用时间倒序，最多返回 `limit` 条。
+    pub fn profile_list_recent(&self, limit: u32) -> Result<Vec<ProfileRow>> {
+        let all = self.profile_list()?;
+        let mut recent: Vec<ProfileRow> = all.into_iter().filter(|p| p.last_used_at > 0).collect();
+        recent.sort_by(|a, b| {
+            b.last_used_at
+                .cmp(&a.last_used_at)
+                .then_with(|| a.sort_order.cmp(&b.sort_order))
+        });
+        recent.truncate(limit as usize);
+        Ok(recent)
     }
 
     fn profile_exists(&self, id: &str) -> bool {
@@ -427,6 +458,7 @@ impl Db {
                 sort_order: sort,
                 updated_at: 0,
                 created_at: 0,
+                last_used_at: 0,
                 deleted: false,
                 dirty: true,
             };
@@ -823,11 +855,11 @@ impl Db {
                     let config_raw = config.to_string();
                     let created = local_updated.map_or(now_ms(), |_| 0);
                     conn.execute(
-                        "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
+                        "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, last_used_at, dirty)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0)
                          ON CONFLICT(id) DO UPDATE SET
                            kind = ?2, name = ?3, config = ?4, group_id = ?5, sort_order = ?6,
-                           updated_at = ?7, deleted = ?9, dirty = 0",
+                           updated_at = ?7, deleted = ?9, last_used_at = 0, dirty = 0",
                         params![id, kind, name, config_raw, group_id, sort_order, item.updated_at, created, item.deleted as i64],
                     )
                     .map_err(TermError::Db)?;
@@ -1077,8 +1109,8 @@ impl Db {
                 let config_raw =
                     serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
                 conn.execute(
-                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
+                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, last_used_at, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1)",
                     params![p.id, p.kind, p.name, config_raw, p.group_id, p.sort_order, now, now, 0i64],
                 )
                 .map_err(TermError::Db)?;
@@ -1127,11 +1159,11 @@ impl Db {
                 let config_raw =
                     serde_json::to_string(&p.config).unwrap_or_else(|_| "{}".into());
                 conn.execute(
-                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+                    "INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, deleted, last_used_at, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1)
                      ON CONFLICT(id) DO UPDATE SET
                        kind = ?2, name = ?3, config = ?4, group_id = ?5, sort_order = ?6,
-                       updated_at = ?7, deleted = ?9, dirty = 1",
+                       updated_at = ?7, deleted = ?9, last_used_at = 0, dirty = 1",
                     params![
                         p.id,
                         p.kind,
@@ -1255,6 +1287,7 @@ mod tests {
             name: id.to_string(),
             config: serde_json::json!({ "host": "example.com", "port": 22 }),
             group_id: group_id.map(String::from),
+            last_used_at: 0,
             sort_order: 0,
             updated_at: 0,
             created_at: 0,
@@ -1608,5 +1641,63 @@ mod tests {
         let st3 = db2.backup_import(&path, false).unwrap();
         assert_eq!(st3.snippets, 0);
         assert_eq!(db2.snippet_list().unwrap()[0].title, "本地新");
+    }
+
+    // ---------------- R-09 最近会话 / 连接历史 ----------------
+
+    #[test]
+    fn profile_recent_tracks_last_used() {
+        let db = tmp_db();
+        db.profile_save(sample_profile("a", None)).unwrap();
+        db.profile_save(sample_profile("b", None)).unwrap();
+        db.profile_save(sample_profile("c", None)).unwrap();
+
+        // 未使用过的档案不进入最近列表
+        assert!(db.profile_list_recent(10).unwrap().is_empty());
+
+        // touch 后记录时间戳
+        db.profile_touch("b").unwrap();
+        let rec = db.profile_list_recent(10).unwrap();
+        assert_eq!(rec.len(), 1);
+        assert_eq!(rec[0].id, "b");
+        assert!(rec[0].last_used_at > 0);
+    }
+
+    #[test]
+    fn profile_recent_ordering_and_limit() {
+        let db = tmp_db();
+        db.profile_save(sample_profile("a", None)).unwrap();
+        db.profile_save(sample_profile("b", None)).unwrap();
+        db.profile_save(sample_profile("c", None)).unwrap();
+
+        // 依次使用 a -> c -> b，最近使用顺序应为 b, c, a
+        db.profile_touch("a").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.profile_touch("c").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.profile_touch("b").unwrap();
+
+        let rec = db.profile_list_recent(10).unwrap();
+        let ids: Vec<&str> = rec.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c", "a"]);
+
+        // limit 截断
+        let limited = db.profile_list_recent(2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].id, "b");
+        assert_eq!(limited[1].id, "c");
+    }
+
+    #[test]
+    fn profile_touch_does_not_set_dirty() {
+        // touch 不应触发云同步（last_used_at 为本地使用记录）
+        let db = tmp_db();
+        db.profile_save(sample_profile("a", None)).unwrap();
+        db.sync_mark_pushed(
+            &db.sync_export_dirty().unwrap(),
+        )
+        .unwrap();
+        db.profile_touch("a").unwrap();
+        assert!(db.sync_export_dirty().unwrap().is_empty());
     }
 }
