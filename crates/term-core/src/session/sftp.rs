@@ -75,6 +75,9 @@ pub struct SftpEntry {
     pub group: String,
     /// 人类可读的修改时间（来自 sftp `ls -la` 的月/日/时:分 或 月/日/年）。
     pub mtime: String,
+    /// 符号链接指向的目标（仅软链接有值）。
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 impl SftpRequest {
@@ -238,7 +241,20 @@ fn parse_ls(output: &str) -> Vec<SftpEntry> {
         let month = parts.next().unwrap_or("");
         let day = parts.next().unwrap_or("");
         let time_or_year = parts.next().unwrap_or("");
-        let name = parts.collect::<Vec<_>>().join(" ");
+        let raw_name = parts.collect::<Vec<_>>().join(" ");
+        // 符号链接形如 `name -> target`，需剥离目标部分，仅保留链接名
+        let (name, target) = if kind_char == 'l' {
+            if let Some(idx) = raw_name.find(" -> ") {
+                (
+                    raw_name[..idx].to_string(),
+                    Some(raw_name[idx + 4..].to_string()),
+                )
+            } else {
+                (raw_name, None)
+            }
+        } else {
+            (raw_name, None)
+        };
         if name.is_empty() || name == "." || name == ".." {
             continue;
         }
@@ -252,6 +268,7 @@ fn parse_ls(output: &str) -> Vec<SftpEntry> {
             owner,
             group,
             mtime: format!("{month} {day} {time_or_year}").trim().to_string(),
+            target,
         });
     }
     entries.sort_by(|a, b| {
@@ -276,10 +293,10 @@ total 4096
 ";
         let e = parse_ls(out);
         assert_eq!(e.len(), 3);
-        // 目录优先
+        // 排序约定：目录优先；其余按名称字母序（"link" < "note.txt"）
         assert!(e[0].is_dir && e[0].name == "docs");
-        assert!(!e[1].is_dir && e[1].name == "note.txt" && e[1].size == 123);
-        assert!(e[2].is_link && e[2].name == "link");
+        assert!(e[1].is_link && e[1].name == "link" && e[1].target.as_deref() == Some("docs"));
+        assert!(!e[2].is_dir && e[2].name == "note.txt" && e[2].size == 123);
     }
 
     #[test]
