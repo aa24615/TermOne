@@ -1,14 +1,26 @@
 services:
   termone-server:
-    build: ./apps/server
+    build:
+      # 构建上下文必须是仓库根，这样多阶段 Dockerfile 才能同时拿到
+      # apps/server（服务端）与 apps/web（前端源码）并一起构建。
+      context: .
+      dockerfile: apps/server/Dockerfile
+      # 本机环境无法直连 Docker Hub，改用本地已缓存的 daocloud 镜像源与
+      # 国内 npm 镜像站，保证镜像能正常构建（仓库默认仍是官方源）。
+      args:
+        NODE_IMAGE: docker.m.daocloud.io/library/node:24-alpine
+        NPM_REGISTRY: https://registry.npmmirror.com
     # 已推送到 CNB 制品库时可直接用镜像（替换为你的仓库路径）:
     # image: docker.cnb.cool/zyan2026/sshz/termone-server:latest
+    image: termone-server:local
     container_name: termone-server
     restart: unless-stopped
     ports:
       - "8787:8787"
     environment:
       TERMONE_DATA: /data
+      PORT: "8787"
+      HOST: "0.0.0.0"
     volumes:
       - termone-data:/data
 

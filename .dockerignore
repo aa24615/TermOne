@@ -1,0 +1,30 @@
+# 仓库根 .dockerignore（构建上下文 = 仓库根）
+# 目的：把镜像用不到的重物挡在构建上下文之外，避免 docker build 把
+# 整个 Rust 编译产物 / 桌面端 / node_modules 发给守护进程。
+
+# 依赖缓存（各构建阶段会重新安装）
+node_modules
+**/node_modules
+
+# Rust 相关（服务端 / web 都不需要）
+target
+crates
+apps/desktop
+
+# 版本控制与工具链
+.git
+.workbuddy
+.cnb
+docs
+tools
+scripts
+
+# 运行数据 / 日志（不应进入镜像）
+data
+data-test
+*.log
+*.db
+*.db-journal
+
+# 杂项
+wv2.log

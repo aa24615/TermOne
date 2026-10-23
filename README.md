@@ -63,10 +63,12 @@ npm run tauri build
 
 ```bash
 # 本地构建并启动（推荐，数据持久化在 named volume /data）
+# 注意：构建上下文必须是仓库根目录，多阶段 Dockerfile 会在镜像内
+# 先构建 apps/web，再由服务端托管 /web/dist（同源 Web SSH 控制台）。
 docker compose up -d --build
 
 # 或手动构建运行
-docker build -t termone-server apps/server
+docker build -t termone-server -f apps/server/Dockerfile .
 docker run -d -p 8787:8787 -v termone-data:/data termone-server
 
 # 使用 CI 推送到制品库的镜像（替换仓库路径）
@@ -74,8 +76,9 @@ docker run -d -p 8787:8787 -v termone-data:/data \
   docker.cnb.cool/zyan2026/sshz/termone-server:latest
 ```
 
-- 数据目录：容器内 `/data`（`TERMONE_DATA` 可改），含 `termone-server.db` 与自动生成的 `jwt.secret`
-- 生产环境建议置于反向代理 + HTTPS 之后
+- 镜像同时包含**服务端 API 与构建好的 Web SSH 控制台**，二者同源同端口 `8787`，无需单独部署前端。
+- 数据目录：容器内 `/data`（`TERMONE_DATA` 可改），含 `termone-server.db`、`jwt.secret`、`cred.key`（凭据主密钥）；均以 `0600` 生成，挂载 named volume 可跨容器重启保留。
+- 生产环境建议置于反向代理 + HTTPS 之后。
 
 ## 发版与打包（CNB 流水线）
 
