@@ -72,6 +72,25 @@ pub struct SnippetRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginRow {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// 生命周期状态：installed | enabled | active | disabled | uninstalled
+    pub state: String,
+    /// 来源：market | local | dev
+    pub source: String,
+    /// 清单 JSON（含权限声明，供沙箱裁决）
+    pub manifest: String,
+    pub installed_at: i64,
+    pub updated_at: i64,
+    pub created_at: i64,
+    pub deleted: bool,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingRow {
     pub key: String,
     pub value: String,
@@ -103,6 +122,7 @@ pub struct BackupStats {
     pub groups: u32,
     pub snippets: u32,
     pub settings: u32,
+    pub plugins: u32,
 }
 
 const BACKUP_KIND: &str = "termone-backup";
@@ -119,6 +139,7 @@ struct BackupFile<'a> {
     groups: &'a [GroupRow],
     snippets: &'a [SnippetRow],
     settings: &'a [SettingRow],
+    plugins: &'a [PluginRow],
 }
 
 #[derive(Deserialize)]
@@ -132,6 +153,8 @@ struct BackupFileOwned {
     snippets: Vec<SnippetRow>,
     #[serde(default)]
     settings: Vec<SettingRow>,
+    #[serde(default)]
+    plugins: Vec<PluginRow>,
 }
 
 const SCHEMA: &str = r#"
@@ -174,6 +197,19 @@ CREATE TABLE IF NOT EXISTS snippets (
     created_at INTEGER NOT NULL,
     deleted    INTEGER NOT NULL DEFAULT 0,
     dirty      INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS plugins (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    version     TEXT NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'installed',
+    source      TEXT NOT NULL DEFAULT 'local',
+    manifest    TEXT NOT NULL DEFAULT '{}',
+    installed_at INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0,
+    dirty       INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
@@ -663,6 +699,115 @@ impl Db {
         Ok(())
     }
 
+    // ---------------- plugins (R-20) ----------------
+
+    fn plugin_row_from(r: &rusqlite::Row) -> rusqlite::Result<PluginRow> {
+        Ok(PluginRow {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            version: r.get(2)?,
+            state: r.get(3)?,
+            source: r.get(4)?,
+            manifest: r.get(5)?,
+            installed_at: r.get(6)?,
+            updated_at: r.get(7)?,
+            created_at: r.get(8)?,
+            deleted: r.get::<_, i64>(9)? != 0,
+            dirty: r.get::<_, i64>(10)? != 0,
+        })
+    }
+
+    /// 新增或更新插件记录。返回带时间戳与 dirty 标记的行。
+    pub fn plugin_save(&self, mut p: PluginRow) -> Result<PluginRow> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT created_at FROM plugins WHERE id = ?1",
+                params![p.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(TermError::Db)?;
+        let now = now_ms();
+        p.created_at = match existing {
+            Some(created) => created,
+            None if p.created_at > 0 => p.created_at,
+            None => now,
+        };
+        p.updated_at = now;
+        p.dirty = true;
+        conn.execute(
+            "INSERT INTO plugins (id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name, version = excluded.version, state = excluded.state,
+               source = excluded.source, manifest = excluded.manifest,
+               updated_at = excluded.updated_at, created_at = excluded.created_at,
+               deleted = excluded.deleted, dirty = 1",
+            params![
+                p.id, p.name, p.version, p.state, p.source, p.manifest, p.installed_at, p.updated_at, p.created_at, p.deleted as i64
+            ],
+        )
+        .map_err(TermError::Db)?;
+        Ok(p)
+    }
+
+    /// 读取单个插件（仅未删除）。
+    pub fn plugin_get(&self, id: &str) -> Result<Option<PluginRow>> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<PluginRow> = conn
+            .query_row(
+                "SELECT id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty
+                 FROM plugins WHERE id = ?1 AND deleted = 0",
+                params![id],
+                Self::plugin_row_from,
+            )
+            .optional()
+            .map_err(TermError::Db)?;
+        Ok(row)
+    }
+
+    pub fn plugin_list(&self) -> Result<Vec<PluginRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty
+                 FROM plugins WHERE deleted = 0 ORDER BY name ASC",
+            )
+            .map_err(TermError::Db)?;
+        let rows = stmt
+            .query_map([], Self::plugin_row_from)
+            .map_err(TermError::Db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(TermError::Db)?);
+        }
+        Ok(out)
+    }
+
+    /// 状态跃迁（持久化）。`uninstalled` 同时置 deleted=1（软删除），便于同步传播移除。
+    pub fn plugin_set_state(&self, id: &str, state: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = if state == "uninstalled" { 1i64 } else { 0 };
+        conn.execute(
+            "UPDATE plugins SET state = ?1, deleted = ?2, updated_at = ?3, dirty = 1 WHERE id = ?4",
+            params![state, deleted, now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
+    /// 软删除插件（等价于卸载：deleted=1 且 dirty=1，用于同步传播删除）。
+    pub fn plugin_delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE plugins SET deleted = 1, state = 'uninstalled', dirty = 1, updated_at = ?1 WHERE id = ?2",
+            params![now_ms(), id],
+        )
+        .map_err(TermError::Db)?;
+        Ok(())
+    }
+
     // ---------------- settings ----------------
 
     pub fn settings_all(&self) -> Result<Vec<SettingRow>> {
@@ -815,6 +960,39 @@ impl Db {
                         data: payload.to_string(),
                         updated_at: row.get(4)?,
                         deleted: row.get::<_, i64>(5)? != 0,
+                    })
+                })
+                .map_err(TermError::Db)?;
+            for r in rows {
+                items.push(r.map_err(TermError::Db)?);
+            }
+        }
+        {
+            let mut stmt = conn
+                .prepare("SELECT id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty FROM plugins WHERE dirty = 1")
+                .map_err(TermError::Db)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let payload = PluginRow {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        version: row.get(2)?,
+                        state: row.get(3)?,
+                        source: row.get(4)?,
+                        manifest: row.get(5)?,
+                        installed_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        created_at: row.get(8)?,
+                        deleted: row.get::<_, i64>(9)? != 0,
+                        dirty: row.get::<_, i64>(10)? != 0,
+                    };
+                    Ok(SyncItem {
+                        item_id: payload.id.clone(),
+                        kind: "plugin".into(),
+                        key: None,
+                        data: serde_json::to_string(&payload).unwrap_or_default(),
+                        updated_at: payload.updated_at,
+                        deleted: payload.deleted,
                     })
                 })
                 .map_err(TermError::Db)?;
@@ -996,6 +1174,37 @@ impl Db {
                     .map_err(TermError::Db)?;
                     applied += 1;
                 }
+                "plugin" => {
+                    let row: PluginRow = match serde_json::from_str(&item.data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let id = item.item_id.clone();
+                    let local_updated: Option<i64> = conn
+                        .query_row(
+                            "SELECT updated_at FROM plugins WHERE id = ?1",
+                            params![id],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(TermError::Db)?;
+                    if let Some(t) = local_updated {
+                        if t >= item.updated_at {
+                            continue;
+                        }
+                    }
+                    let created = local_updated.map_or(now_ms(), |_| 0);
+                    conn.execute(
+                        "INSERT INTO plugins (id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)
+                         ON CONFLICT(id) DO UPDATE SET
+                           name = ?2, version = ?3, state = ?4, source = ?5, manifest = ?6,
+                           updated_at = ?8, created_at = ?9, deleted = ?10, dirty = 0",
+                        params![id, row.name, row.version, row.state, row.source, row.manifest, row.installed_at, item.updated_at, created, row.deleted as i64],
+                    )
+                    .map_err(TermError::Db)?;
+                    applied += 1;
+                }
                 _ => {}
             }
         }
@@ -1037,6 +1246,13 @@ impl Db {
                         .map_err(TermError::Db)?;
                     }
                 }
+                "plugin" => {
+                    conn.execute(
+                        "UPDATE plugins SET dirty = 0 WHERE id = ?1 AND updated_at <= ?2",
+                        params![item.item_id, item.updated_at],
+                    )
+                    .map_err(TermError::Db)?;
+                }
                 _ => {}
             }
         }
@@ -1076,11 +1292,13 @@ impl Db {
         let groups = self.group_list()?;
         let snippets = self.snippet_list()?;
         let settings = self.settings_all()?;
+        let plugins = self.plugin_list()?;
         let stats = BackupStats {
             profiles: profiles.len() as u32,
             groups: groups.len() as u32,
             snippets: snippets.len() as u32,
             settings: settings.len() as u32,
+            plugins: plugins.len() as u32,
         };
         let file = BackupFile {
             app: "termone",
@@ -1091,6 +1309,7 @@ impl Db {
             groups: &groups,
             snippets: &snippets,
             settings: &settings,
+            plugins: &plugins,
         };
         let json =
             serde_json::to_string_pretty(&file).map_err(|e| TermError::Other(e.to_string()))?;
@@ -1110,7 +1329,7 @@ impl Db {
         let now = now_ms();
         if replace {
             conn.execute_batch(
-                "DELETE FROM profiles; DELETE FROM groups; DELETE FROM snippets; DELETE FROM settings;",
+                "DELETE FROM profiles; DELETE FROM groups; DELETE FROM snippets; DELETE FROM settings; DELETE FROM plugins;",
             )
             .map_err(TermError::Db)?;
         }
@@ -1118,6 +1337,7 @@ impl Db {
         let mut groups_count = 0u32;
         let mut snippets_count = 0u32;
         let mut settings_count = 0u32;
+        let mut plugins_count = 0u32;
         if replace {
             for p in &file.profiles {
                 let config_raw =
@@ -1156,6 +1376,15 @@ impl Db {
                 )
                 .map_err(TermError::Db)?;
                 settings_count += 1;
+            }
+            for p in &file.plugins {
+                conn.execute(
+                    "INSERT INTO plugins (id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)",
+                    params![p.id, p.name, p.version, p.state, p.source, p.manifest, p.installed_at, now, now, 0i64],
+                )
+                .map_err(TermError::Db)?;
+                plugins_count += 1;
             }
         } else {
             for p in &file.profiles {
@@ -1275,12 +1504,36 @@ impl Db {
                 .map_err(TermError::Db)?;
                 settings_count += 1;
             }
+            for p in &file.plugins {
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT updated_at FROM plugins WHERE id = ?1",
+                        params![p.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(TermError::Db)?;
+                if existing.map_or(false, |t| t >= p.updated_at) {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT INTO plugins (id, name, version, state, source, manifest, installed_at, updated_at, created_at, deleted, dirty)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+                     ON CONFLICT(id) DO UPDATE SET
+                       name = ?2, version = ?3, state = ?4, source = ?5, manifest = ?6,
+                       updated_at = ?8, created_at = ?9, deleted = ?10, dirty = 1",
+                    params![p.id, p.name, p.version, p.state, p.source, p.manifest, p.installed_at, p.updated_at, p.created_at, p.deleted as i64],
+                )
+                .map_err(TermError::Db)?;
+                plugins_count += 1;
+            }
         }
         Ok(BackupStats {
             profiles: profiles_count,
             groups: groups_count,
             snippets: snippets_count,
             settings: settings_count,
+            plugins: plugins_count,
         })
     }
 }
@@ -1710,6 +1963,140 @@ mod tests {
         db.sync_mark_pushed(&db.sync_export_dirty().unwrap()).unwrap();
         db.profile_touch("a").unwrap();
         assert!(db.sync_export_dirty().unwrap().is_empty());
+    }
+
+    // ---------------- R-20 插件运行时 / 插件管理 ----------------
+
+    fn sample_plugin(id: &str, name: &str, state: &str) -> PluginRow {
+        PluginRow {
+            id: id.into(),
+            name: name.into(),
+            version: "1.0.0".into(),
+            state: state.into(),
+            source: "local".into(),
+            manifest: "{}".into(),
+            installed_at: 0,
+            updated_at: 0,
+            created_at: 0,
+            deleted: false,
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn plugin_crud_and_dirty() {
+        let db = tmp_db();
+        let saved = db
+            .plugin_save(sample_plugin("com.termone.sftp", "SFTP", "installed"))
+            .unwrap();
+        assert!(saved.dirty);
+        assert!(saved.updated_at > 0);
+        let list = db.plugin_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "SFTP");
+        assert_eq!(list[0].state, "installed");
+
+        // 状态跃迁持久化
+        db.plugin_set_state("com.termone.sftp", "enabled").unwrap();
+        assert_eq!(
+            db.plugin_get("com.termone.sftp").unwrap().unwrap().state,
+            "enabled"
+        );
+
+        // 软删除（卸载）后列表不再包含，但同步导出仍含 deleted
+        db.plugin_delete("com.termone.sftp").unwrap();
+        assert!(db.plugin_list().unwrap().is_empty());
+        let dirty = db.sync_export_dirty().unwrap();
+        assert!(dirty
+            .iter()
+            .any(|i| i.kind == "plugin" && i.item_id == "com.termone.sftp" && i.deleted));
+    }
+
+    #[test]
+    fn plugin_uninstall_clears_state_and_propagates() {
+        let db = tmp_db();
+        db.plugin_save(sample_plugin("p1", "P1", "active")).unwrap();
+        db.plugin_set_state("p1", "uninstalled").unwrap();
+        let row = db.plugin_get("p1").unwrap();
+        assert!(row.is_none(), "卸载后不可通过 get 取到（deleted=1）");
+        let dirty = db.sync_export_dirty().unwrap();
+        let item = dirty
+            .iter()
+            .find(|i| i.kind == "plugin" && i.item_id == "p1")
+            .unwrap();
+        assert!(item.deleted);
+    }
+
+    #[test]
+    fn plugin_sync_lww() {
+        let db = tmp_db();
+        let base = PluginRow {
+            id: "com.termone.ai".into(),
+            name: "AI".into(),
+            version: "0.9.0".into(),
+            state: "installed".into(),
+            source: "market".into(),
+            manifest: "{}".into(),
+            installed_at: 0,
+            updated_at: 1000,
+            created_at: 0,
+            deleted: false,
+            dirty: false,
+        };
+        let item = SyncItem {
+            item_id: base.id.clone(),
+            kind: "plugin".into(),
+            key: None,
+            data: serde_json::to_string(&base).unwrap(),
+            updated_at: 1000,
+            deleted: false,
+        };
+        assert_eq!(db.sync_apply_pull(&[item.clone()]).unwrap(), 1);
+        assert_eq!(db.plugin_list().unwrap()[0].version, "0.9.0");
+
+        // 远端更旧不覆盖
+        let older = SyncItem {
+            updated_at: 500,
+            ..item.clone()
+        };
+        assert_eq!(db.sync_apply_pull(&[older]).unwrap(), 0);
+
+        // 远端更新覆盖（含卸载传播）
+        let newer = SyncItem {
+            data: serde_json::to_string(&PluginRow {
+                version: "1.0.0".into(),
+                deleted: true,
+                ..base.clone()
+            })
+            .unwrap(),
+            updated_at: 2000,
+            deleted: true,
+            ..item.clone()
+        };
+        assert_eq!(db.sync_apply_pull(&[newer]).unwrap(), 1);
+        assert!(db.plugin_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn plugin_backup_roundtrip_and_unicode() {
+        let db = tmp_db();
+        db.plugin_save(sample_plugin("com.termone.sftp", "SFTP 文件管理 ☁", "enabled")).unwrap();
+        let path = std::env::temp_dir().join(format!("termone-bk-{}.json", uuid::Uuid::new_v4()));
+        let st = db.backup_export(&path).unwrap();
+        assert_eq!(st.plugins, 1);
+
+        let db2 = tmp_db();
+        let st2 = db2.backup_import(&path, true).unwrap();
+        assert_eq!(st2.plugins, 1);
+        let restored = db2.plugin_list().unwrap();
+        assert_eq!(restored[0].name, "SFTP 文件管理 ☁");
+        assert_eq!(restored[0].state, "enabled");
+
+        // 合并模式：本地更新插件不被旧备份覆盖
+        db2.plugin_save(sample_plugin("com.termone.sftp", "本地新名", "disabled")).unwrap();
+        let st3 = db2.backup_import(&path, false).unwrap();
+        assert_eq!(st3.plugins, 0);
+        assert_eq!(db2.plugin_list().unwrap()[0].name, "本地新名");
     }
 
     // ---------------- P4/P5 边界与回归 ----------------
