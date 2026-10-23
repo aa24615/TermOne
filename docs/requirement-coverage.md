@@ -33,6 +33,7 @@
 | **R-04 SSH 自动重连 + 心跳保活** | P1 | `reconnect.rs`：`ReconnectPolicy`（指数退避+最大重试+抖动）、`KeepAlivePolicy`（空闲心跳）；纯逻辑零 I/O | `p0_first_delay_is_base`、`p1_exponential_growth_capped`、`p2_max_attempts_stops_reconnect`、`p3_factor_one_is_constant`、`p4_jitter_bounds`、`p5_edge_no_overflow_zero_base`、`keepalive_idle_triggers`、`keepalive_zero_interval_always` |
 | **R-07 常用命令 Snippets 片段库** | P2 | `snippets` 表；`snippet_save/list/delete`；纳入 LWW 同步与备份 | `snippet_crud_and_dirty`、`snippet_export_mark_pushed`、`snippet_sync_lww`、`snippet_backup_roundtrip_and_unicode` |
 | **R-09 最近会话/连接历史** | P2 | `profiles.last_used_at`；`profile_touch`、`profile_list_recent(limit)`；touch 不触发云同步 | `profile_recent_tracks_last_used`、`profile_recent_ordering_and_limit`、`profile_touch_does_not_set_dirty` |
+| **R-20 插件运行时 + 插件管理（地基 S1-逻辑/存储）** | **Must** | `plugin.rs`：manifest 校验（逆域名 id/语义化版本/权限声明）、权限沙箱 `PermissionChecker`（IPC 白名单、网络域名白名单、**密钥环硬编码拒绝**）、生命周期状态机 `PluginState`、审计事件 `AuditEvent`、`.tpk` 路径穿越校验；`storage.rs` 新增 `plugins` 表与 CRUD，纳入 LWW 同步与本地备份 | `p0_manifest_roundtrip_and_validate`、`p0_manifest_rejects_invalid_id_and_version`、`p0_tpk_manifest_valid`、`p1_permission_ipc_allow_deny`、`p1_permission_net_allow_deny`、`p1_lifecycle_transitions_valid_and_invalid`、`p2_capability_check`、`p3_audit_event_recorded_on_deny`、`p4_unicode_name_valid`、`p4_malformed_json_rejected`、`p4_empty_permissions_default_deny`、`p5_keyring_hard_deny_under_any_declaration`、`p5_tpk_rejects_path_traversal`、`plugin_crud_and_dirty`、`plugin_uninstall_clears_state_and_propagates`、`plugin_sync_lww`、`plugin_backup_roundtrip_and_unicode` |
 | **R-03 分屏 Split Panes** | P1 | `paneTree.ts` 面板树模型；`Tab` 承载 `layout` 树；水平/垂直分屏 + 拖拽分隔条；快捷键 Alt+Shift+H/V 分屏、Alt+Shift+X 关面板；`TerminalView` 改为按 `Pane` 渲染 | 前端 tsc + vite 构建通过；交互待真机验证 |
 | **R-08 会话日志 Session Logging** | P2 | `session_open` 按 `logSessions` 设置把输出字节 tee 到 `<app_data>/logs/<uuid>.log`；新增 `session_log_read` 回放命令；设置开关 + 面板「日志」回放弹窗（ANSI 清理） | 前端 tsc 通过；后端待本机构建验证 |
 | **R-06/R-10 端口转发/JumpHost** | P2 | `SessionRequest` 增 `proxyJump/localForward/remoteForward/dynamicForward`；`ssh.rs` 组装 `-J/-L/-R/-D`；`ProfileDialog` SSH 区新增字段 | 前端 tsc 通过；后端待本机构建验证 |
@@ -61,7 +62,7 @@
 | SFTP（`FileManager.tsx`） | 已实现，内置 | 官方插件 `com.termone.sftp` | **否**（6 个 IPC 命令已在核心） |
 | 会话日志回放 | 已实现，内置弹窗 | 官方插件 `com.termone.session-log`（录制开关留核心） | 否 |
 | Snippets UI | 后端已实现 | 官方插件 `com.termone.snippets` | 否 |
-| 插件运行时（R-20） | 未实现 | 核心新增 `plugin/{types,hostApi,registry,loader,manager,sandbox}` + `plugins` 表 + 4 个 IPC 命令 | **是**（新增 IPC 命令） |
+| 插件运行时（R-20） | **S1 部分实现（纯逻辑层 + plugins 表，本机已单测）** | 核心新增 `plugin/{types,hostApi,registry,loader,manager,sandbox}` + `plugins` 表 + 4 个 IPC 命令；**已完成**：manifest/权限沙箱/生命周期/审计/.tpk 校验（plugin.rs）+ plugins 存储表（storage.rs）。**待补**：注册表/加载器/沙箱运行时、4 个 IPC 命令、管理对话框 | **是**（新增 IPC 命令待 CI 构建） |
 | AI 辅助 / 广播 / Quake / Triggers / 主题市场 / Zmodem | 未实现 | 全部为插件 | 否（若需新能力则另补命令） |
 
 ### 实施分期与验证口径
@@ -90,7 +91,7 @@
 
 | 需求 | 级别 | 未做原因 | 建议下一步 |
 |---|---|---|---|
-| **R-20 插件运行时 + 插件管理** | **Must** | 新战略的地基，尚未实现 | **最高优先**：先做 S1 运行时，再做 S2（SFTP 插件化）；S1/S2 以纯前端为主，本机可验证 |
+| **R-20 插件运行时 + 插件管理** | **Must** | **S1 逻辑层与 plugins 表已完成并单测（48 passed）**；剩余：注册表/加载器/沙箱运行时、4 个 IPC 命令、管理对话框（需 CI 构建） | **最高优先**：已完成地基，下一步补齐 S1 其余部分并做 SFTP 插件化（S2） |
 | R-11 主题市场（插件） | Could | 需 registry 与分发链路 | 待 R-20 完成后以插件形态交付 |
 | R-12 AI 命令辅助（插件） | Could | 需外部 API、隐私与轻量权衡 | 以默认关闭插件交付，域名白名单 + 用户自填 Key |
 | R-13 Quake / R-14 广播 / R-17 Triggers（插件） | Could | 增值层 | R-20 完成后批量插件化 |
@@ -111,6 +112,7 @@
 
 ## 测试汇总
 
-- 总用例：28（storage 20 + reconnect 8）
-- 结果：`28 passed; 0 failed`
+- 总用例：**48**（覆盖 storage / reconnect / plugin / sftp 各模块）
+- 结果：`48 passed; 0 failed`
 - 命令：`cargo test -p term-core --target x86_64-pc-windows-gnu`（本机）/ `cargo test -p term-core`（常规）
+- 本次新增：修复 SFTP 符号链接名解析缺陷（R-01，1 例修正）；R-20 插件运行时地基新增 17 例 P0–P5 单测（plugin.rs 13 + storage 4）。
