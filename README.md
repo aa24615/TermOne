@@ -108,7 +108,38 @@ npm run check                         # 前端 + 服务端 TypeScript 类型检�
 cargo test -p term-core               # 核心库单元测试（存储 / LWW 合并）
 ```
 
-## 同步协议（概要）
+## Web 版 SSH 远程管理（apps/web）
+
+浏览器端的 SSH 远程管理控制台，**仅做远程 SSH**（不做本地终端 / 串口）。服务端作为 SSH 网关，
+浏览器通过 WebSocket 与之通信，服务端用 `ssh2` 连接目标主机并双向透传。
+
+```bash
+npm run dev:server     # 服务端：http://127.0.0.1:8787
+npm run dev:web        # Web 客户端：http://127.0.0.1:5273（已代理 /api 与 WebSocket）
+```
+
+生产模式无需单独部署前端：服务端会自动托管 `apps/web/dist`（同源，无跨域）。
+
+```bash
+npm run build --workspace @termone/web
+npm run start --workspace @termone/server   # 直接访问 http://<host>:8787
+```
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/ssh/hosts` | 主机列表（**仅元数据，不含凭据**） |
+| POST | `/api/ssh/hosts` | 新增主机（凭据加密落盘） |
+| PATCH | `/api/ssh/hosts/:id` | 编辑（凭据留空 = 保持不变） |
+| DELETE | `/api/ssh/hosts/:id` | 删除主机 |
+| WS | `/api/ws/ssh?token=<jwt>` | SSH 会话网关 |
+
+WS 协议（JSON 文本帧）：
+
+- 客户端 → 服务端：`{type:"connect", cols, rows, hostId? 或 host/port/username/authType/密码或私钥, save?}`、
+  `{type:"data", data(base64)}`、`{type:"resize", cols, rows}`
+- 服务端 → 客户端：`ready` / `data(base64)` / `hostkey`(指纹) / `error` / `exit`
 
 - 客户端为每条数据维护 `updatedAt` / `dirty` / `deleted`
 - **push**：`POST /api/sync/push` 上传 dirty 行；成功后按推送时的 `updatedAt` 清除 dirty
@@ -120,6 +151,28 @@ cargo test -p term-core               # 核心库单元测试（存储 / LWW 合
 - SSH 复用系统 `ssh`：指纹确认、密码输入都发生在真实 PTY 内，不落地明文
 - 机密仅写 OS 密钥环，SQLite 与同步数据中不含任何密码 / 口令
 - 服务端密码为 bcrypt 哈希；令牌为 HS256 JWT（30 天）
+
+### Web 版 SSH 的凭据模型（与桌面端不同，务必知悉）
+
+**桌面端**坚持「密钥永不上传」——凭据只存 OS 密钥环，永不入库、永不上传。
+
+**Web 版 SSH 是例外**：浏览器无法直连 SSH，必须由服务端发起连接。因此服务端需要拿到凭据：
+
+| 模式 | 行为 | 存储 |
+| --- | --- | --- |
+| **保存主机**（默认） | 用户新增主机时填写凭据 | 以 **AES-256-GCM** 加密落盘（`ssh_hosts.secret_enc`），每条独立随机 IV + GCM 认证标签 |
+| **临时连接** | 不勾选保存 | **不落盘**；凭据仅经 WSS 传给服务端，只存在于本次连接的内存中，连接结束即丢弃 |
+
+缓解措施（均已实现）：
+
+- 主密钥与数据分离：`dataDir/cred.key`（0600，首次启动自动生成），不在数据库里
+- **对外接口永不返回明文**：`/api/ssh/hosts` 只返回元数据（id/名称/主机/端口/用户名/认证方式）
+- 明文仅在服务端内存解密，且只用于建立 SSH 连接
+- 主机公钥 **Trust-On-First-Use**（`ssh_known_hosts`）：指纹变更即拒绝连接，防中间人
+- WebSocket 必须携带有效 JWT，否则以 `4401` 关闭——避免服务器沦为开放 SSH 代理
+- 可用 `TERMONE_DATA` 指定数据目录，便于把 `cred.key` 放到独立的受控存储
+
+> 若你要严格保持「服务端零知识」，请只用**临时连接**模式，或直接使用桌面端。
 
 ## Roadmap
 

@@ -1,0 +1,337 @@
+import { createHash } from "node:crypto";
+import type { FastifyInstance } from "fastify";
+import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
+import type { RawData, WebSocket } from "ws";
+
+import { verifyToken } from "./auth";
+import { encryptSecret, newHostId } from "./credCrypto";
+import { db, nowMs, type SshHostRow } from "./db";
+import { loadCredential } from "./sshHosts";
+
+/**
+ * Web 版 SSH 网关（**仅远程 SSH**，不做本地终端 / 串口）。
+ *
+ * 协议（全部为文本帧 JSON）：
+ *   客户端 → 服务端
+ *     { type: "connect", cols, rows, ... }  首帧，hostId 或内联连接参数
+ *     { type: "data", data }                stdin（base64）
+ *     { type: "resize", cols, rows }
+ *   服务端 → 客户端
+ *     { type: "ready", host, username }
+ *     { type: "data", data }                 stdout（base64，UTF-8 流式解码）
+ *     { type: "hostkey", fingerprint, firstUse }
+ *     { type: "error", message, fatal }
+ *     { type: "exit", code, signal }
+ *
+ * 安全要点：
+ *   - 握手必须带有效 JWT（否则 4401 关闭），避免服务器沦为开放 SSH 代理；
+ *   - 凭据明文只在本次连接的内存中，连接结束即丢弃；
+ *   - 主机公钥指纹 Trust-On-First-Use，变更即拒绝（防中间人）。
+ */
+
+interface ConnectFrame {
+  type?: unknown;
+  cols?: unknown;
+  rows?: unknown;
+  hostId?: unknown;
+  host?: unknown;
+  port?: unknown;
+  username?: unknown;
+  authType?: unknown;
+  password?: unknown;
+  privateKey?: unknown;
+  passphrase?: unknown;
+  save?: unknown;
+}
+
+interface Target {
+  host: string;
+  port: number;
+  username: string;
+  authType: "password" | "key";
+  secret: string;
+  passphrase: string | null;
+}
+
+function send(ws: WebSocket, obj: Record<string, unknown>): void {
+  if (ws.readyState !== ws.OPEN) return;
+  ws.send(JSON.stringify(obj));
+}
+
+function num(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function fingerprintOf(key: Buffer): string {
+  return "SHA256:" + createHash("sha256").update(key).digest("base64");
+}
+
+/**
+ * 主机公钥 Trust-On-First-Use。
+ * 首次连接记录指纹并放行；指纹变更则拒绝（可能是中间人或主机重装）。
+ */
+function verifyHostKey(
+  userId: string,
+  host: string,
+  port: number,
+  key: Buffer,
+): { ok: boolean; fingerprint: string; firstUse: boolean } {
+  const fingerprint = fingerprintOf(key);
+  const row = db
+    .prepare("SELECT key_hash FROM ssh_known_hosts WHERE user_id = ? AND host = ? AND port = ?")
+    .get(userId, host, port) as { key_hash: string } | undefined;
+  if (!row) {
+    db.prepare(
+      "INSERT INTO ssh_known_hosts (user_id, host, port, key_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(userId, host, port, fingerprint, nowMs());
+    return { ok: true, fingerprint, firstUse: true };
+  }
+  return { ok: row.key_hash === fingerprint, fingerprint, firstUse: false };
+}
+
+function resolveTarget(
+  userId: string,
+  frame: ConnectFrame,
+): { target: Target } | { error: string } {
+  const hostId = typeof frame.hostId === "string" ? frame.hostId : "";
+
+  if (hostId) {
+    const cred = loadCredential(userId, hostId);
+    if (!cred) return { error: "主机不存在或凭据无法解密" };
+    return {
+      target: {
+        host: cred.row.host,
+        port: Number(cred.row.port),
+        username: cred.row.username,
+        authType: cred.row.auth_type === "key" ? "key" : "password",
+        secret: cred.secret,
+        passphrase: cred.passphrase,
+      },
+    };
+  }
+
+  const host = typeof frame.host === "string" ? frame.host.trim() : "";
+  const username = typeof frame.username === "string" ? frame.username.trim() : "";
+  if (!host) return { error: "主机地址不能为空" };
+  if (!username) return { error: "用户名不能为空" };
+
+  const authType = frame.authType === "key" ? "key" : "password";
+  const secret =
+    authType === "key"
+      ? typeof frame.privateKey === "string"
+        ? frame.privateKey
+        : ""
+      : typeof frame.password === "string"
+        ? frame.password
+        : "";
+  if (!secret) return { error: authType === "key" ? "私钥不能为空" : "密码不能为空" };
+
+  const passphrase =
+    authType === "key" && typeof frame.passphrase === "string" && frame.passphrase
+      ? frame.passphrase
+      : null;
+
+  const port = num(frame.port, 22, 1, 65535);
+  const target: Target = { host, port, username, authType, secret, passphrase };
+
+  if (frame.save === true) {
+    const id = newHostId();
+    const ts = nowMs();
+    db.prepare(
+      `INSERT INTO ssh_hosts
+       (id, user_id, name, host, port, username, auth_type, secret_enc, passphrase_enc, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      `${username}@${host}`,
+      host,
+      port,
+      username,
+      authType,
+      encryptSecret(secret),
+      passphrase ? encryptSecret(passphrase) : null,
+      ts,
+      ts,
+    );
+  }
+
+  return { target };
+}
+
+export function registerSshWsRoutes(app: FastifyInstance): void {
+  app.get("/api/ws/ssh", { websocket: true }, (socket, request) => {
+    const query = (request.query ?? {}) as { token?: string };
+    const userId = query.token ? verifyToken(query.token) : null;
+    if (!userId) {
+      socket.close(4401, "未登录或登录已过期");
+      return;
+    }
+
+    const ws = socket as WebSocket;
+    let ssh: Client | null = null;
+    let stream: ClientChannel | null = null;
+    let connected = false;
+    let closed = false;
+
+    const cleanup = () => {
+      closed = true;
+      try {
+        stream?.end();
+      } catch {
+        /* ignore */
+      }
+      try {
+        ssh?.end();
+      } catch {
+        /* ignore */
+      }
+      ssh = null;
+      stream = null;
+    };
+
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
+
+    ws.on("message", (raw: RawData) => {
+      if (closed) return;
+      let frame: ConnectFrame & { data?: unknown };
+      try {
+        frame = JSON.parse(String(raw));
+      } catch {
+        return send(ws, { type: "error", message: "无效的帧" });
+      }
+
+      // ---- 首帧：建立 SSH 连接 ----
+      if (!connected) {
+        if (frame.type !== "connect") {
+          return send(ws, { type: "error", message: "首帧必须是 connect", fatal: true });
+        }
+        const resolved = resolveTarget(userId, frame);
+        if ("error" in resolved) {
+          return send(ws, { type: "error", message: resolved.error, fatal: true });
+        }
+        connected = true;
+
+        const target = resolved.target;
+        const cols = num(frame.cols, 120, 20, 500);
+        const rows = num(frame.rows, 32, 5, 200);
+
+        const cfg: ConnectConfig = {
+          host: target.host,
+          port: target.port,
+          username: target.username,
+          readyTimeout: 15000,
+          keepaliveInterval: 15000,
+          keepaliveCountMax: 3,
+          hostVerifier: (key: Buffer) => {
+            const v = verifyHostKey(userId, target.host, target.port, key);
+            if (v.firstUse || v.ok) {
+              send(ws, { type: "hostkey", fingerprint: v.fingerprint, firstUse: v.firstUse });
+            } else {
+              send(ws, {
+                type: "error",
+                message: `主机公钥指纹已变更（${v.fingerprint}），疑似中间人攻击，已拒绝连接`,
+                fatal: true,
+              });
+            }
+            return v.ok;
+          },
+        };
+        if (target.authType === "key") {
+          cfg.privateKey = target.secret;
+          if (target.passphrase) cfg.passphrase = target.passphrase;
+        } else {
+          cfg.password = target.secret;
+        }
+
+        const conn = new Client();
+        ssh = conn;
+
+        conn.on("ready", () => {
+          conn.shell({ cols, rows, term: "xterm-256color" }, (err, ch) => {
+            if (err) {
+              send(ws, { type: "error", message: err.message, fatal: true });
+              cleanup();
+              return;
+            }
+            stream = ch;
+            send(ws, { type: "ready", host: target.host, username: target.username });
+
+            ch.on("close", () => {
+              send(ws, { type: "exit" });
+              try {
+                ws.close();
+              } catch {
+                /* ignore */
+              }
+              cleanup();
+            });
+            ch.on("data", (chunk: Buffer) => {
+              send(ws, { type: "data", data: chunk.toString("base64") });
+            });
+            ch.on("exit", (code: number | null, signal: string | null) => {
+              send(ws, { type: "exit", code: code ?? undefined, signal: signal ?? undefined });
+            });
+          });
+        });
+
+        conn.on("error", (err: Error & { level?: string }) => {
+          // ssh2 在认证失败时也会 emit error；连接已就绪后的非致命错误不关闭通道
+          const msg = err?.message ?? String(err);
+          send(ws, {
+            type: "error",
+            message: msg,
+            fatal: !stream,
+          });
+          if (!stream) {
+            cleanup();
+            try {
+              ws.close();
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+
+        try {
+          conn.connect(cfg);
+        } catch (e) {
+          send(ws, {
+            type: "error",
+            message: e instanceof Error ? e.message : String(e),
+            fatal: true,
+          });
+          cleanup();
+        }
+        return;
+      }
+
+      // ---- 后续帧：输入 / 调整窗口 ----
+      if (frame.type === "data" && typeof frame.data === "string") {
+        if (!stream) return;
+        try {
+          stream.write(Buffer.from(frame.data, "base64"));
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      if (frame.type === "resize") {
+        if (!stream) return;
+        const cols = num(frame.cols, 120, 20, 500);
+        const rows = num(frame.rows, 32, 5, 200);
+        try {
+          stream.setWindow(rows, cols, 0, 0);
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+  });
+}
+
+// 保持与 sshHosts 的行类型引用一致（编译期校验表结构未漂移）
+export type { SshHostRow };

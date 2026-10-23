@@ -44,6 +44,19 @@ function signToken(userId: string, email: string): string {
   return jwt.sign({ email }, JWT_SECRET, { subject: userId, expiresIn: "30d" });
 }
 
+/**
+ * 校验 Bearer token 并返回 userId；无效返回 null。
+ * 供 WebSocket 握手使用（握手阶段无法用 Fastify reply 回 401）。
+ */
+export function verifyToken(token: string): string | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as JwtPayload & { sub?: string };
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
 interface PublicUser {
   id: string;
   email: string;

@@ -5,13 +5,16 @@
   "description": "TermOne —— 轻量、漂亮的跨平台终端（Windows / macOS）",
   "workspaces": [
     "apps/desktop",
-    "apps/server"
+    "apps/server",
+    "apps/web"
   ],
   "scripts": {
     "dev:desktop": "npm run dev --workspace @termone/desktop",
     "dev:server": "npm run dev --workspace @termone/server",
+    "dev:web": "npm run dev --workspace @termone/web",
     "build:desktop": "npm run build --workspace @termone/desktop",
-    "check": "npm run check --workspace @termone/desktop && npm run check --workspace @termone/server",
+    "build:web": "npm run build --workspace @termone/web",
+    "check": "npm run check --workspace @termone/desktop && npm run check --workspace @termone/server && npm run check --workspace @termone/web",
     "tauri": "npm run tauri --workspace @termone/desktop"
   },
   "engines": {

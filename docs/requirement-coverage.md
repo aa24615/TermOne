@@ -39,11 +39,15 @@
 | **R-05 同步端到端加密 E2EE** | P2 | 前端 Web Crypto（PBKDF2 + AES-GCM）加密同步 `data`，服务端零知识（仅存密文）；口令仅内存不落盘；设置开关 + 重新解锁 | 前端 tsc 通过；单元自测待补 |
 | **R-01 SFTP 图形化文件管理** ⚠️待插件化 | P1 | 复用系统 `sftp -b -` 批处理（**零新增 Rust 依赖**，与 `ssh.rs`「复用系统 ssh」一致）；`session/sftp.rs`：连接参数构造 + 批处理 + `ls -la` 解析；`list/mkdir/remove/rename/download/upload`；`commands.rs` 暴露 6 个 SFTP 命令 + `local_list/local_mkdir`；前端 `FileManager` 侧栏（远端/本地双栏、面包屑、导航、删除/重命名/上传/下载、传输队列），`@tauri-apps/plugin-dialog` 选目录 | 前端 tsc + vite 通过；`sftp.rs` 含 3 个解析单测（随 `cargo test -p term-core` 运行）；端到端待本机构建 + 真机验证。**已按插件化战略改判：6 个 IPC 命令留核心，UI 迁移为官方插件 `com.termone.sftp`** |
 | 边界 / 回归（P3–P5） | P3/P4/P5 | 损坏备份拒绝、空同步幂等、空关键字搜索、LWW 同戳不覆盖（RK-04） | `boundary_corrupt_backup_rejected`、`boundary_empty_sync_is_noop`、`boundary_search_empty_keyword_returns_all`、`boundary_lww_tie_not_applied` |
+| **R-21 Web 版 SSH 远程管理** | Must（服务端） | 服务端 `ssh2` 网关：`credCrypto.ts`（AES-256-GCM，主密钥 `cred.key` 0600 独立于库）、`sshHosts.ts`（主机 CRUD，**对外只返回元数据**）、`sshWs.ts`（`/api/ws/ssh`，JWT 握手校验 + 双向透传 + resize + 主机公钥 TOFU）；`ssh_hosts` / `ssh_known_hosts` 表；生产托管 `apps/web/dist`。前端 `apps/web`（Vite+React+xterm.js）：登录、主机管理、临时连接、终端 | **本机冒烟已验证**：health/注册/登录/主机 CRUD 全通；列表响应与 DB 文件均不含明文；未登录 WS 关闭码 4401；无效 hostId 返回 error 帧；目标不可达回传 `ECONNREFUSED` error 帧。`tsc --noEmit` 与 `vite build` 通过 |
 
 ## 插件化改造（新战略，进行中）
 
 > 依据：`docs/需求.md` §2/§3；规格：`docs/插件系统设计.md`；编号与排期：`docs/竞品分析与需求规划.md` §4.0。
 > 目标：主窗口只保留「轻量实用」的核心，SFTP / AI 辅助 / 广播 / 日志回放 / 主题市场等增值能力**全部改为插件按需安装**。
+>
+> **注意**：插件化针对的是**桌面端主窗口**。Web 版（R-21）是独立的服务端 + 浏览器形态，
+> 其增值功能（SFTP、多标签等）后续同样建议以插件形态提供，但本期 Web 端仅做远程 SSH。
 
 ### 决策
 
