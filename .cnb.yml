@@ -58,7 +58,7 @@ main:
         - name: upload to release
           script: |
             $env:RELEASE_TAG = "v$env:VERSION"
-            node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
+            node scripts/upload-release-assets.mjs target/release/bundle
 
     - name: desktop-macos
       runner:
@@ -74,7 +74,7 @@ main:
         - name: build bundles
           script: npm run tauri build
         - name: upload to release
-          script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs apps/desktop/src-tauri/target/release/bundle
+          script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs target/release/bundle
 
   web_trigger_server_image:
     - name: server-image
