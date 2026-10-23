@@ -182,13 +182,13 @@ Start-Sleep -Seconds 1
 # 1. Welcome pane
 Save-Window $p (Join-Path $Out "welcome.png")
 
-# 2. New profile dialog
-Click-Text $p "新建 SSH / 串口档案"
+# 2. New profile dialog (use the always-visible sidebar "+" button)
+Click-Text $p "新建档案"
 Save-Window $p (Join-Path $Out "profile-new.png")
 Click-Text $p "取消"
 
 # 3. Local terminal with a couple of commands (default shell on Windows is PowerShell)
-Click-Text $p "新建本地终端"
+Click-Text $p "新建本地终端 (Ctrl+T)"
 Start-Sleep -Seconds 3
 Type-Line $p "echo TermOne - lightweight terminal{ENTER}"
 Type-Line $p "Get-Date{ENTER}"
