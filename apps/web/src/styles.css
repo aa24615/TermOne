@@ -222,6 +222,20 @@ textarea:focus {
   color: var(--fg-dim);
 }
 
+.badge.e2ee {
+  background: rgba(255, 176, 32, 0.16);
+  color: #b57b00;
+}
+
+/* E2EE 加密主机：服务端只有密文，Web 端不可连接，置灰展示 */
+.host-item.encrypted {
+  opacity: 0.62;
+}
+
+.host-item.encrypted .host-main {
+  cursor: default;
+}
+
 .host-sub {
   color: var(--fg-dim);
   font-size: 12px;

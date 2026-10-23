@@ -4,7 +4,7 @@ export interface UserDto {
   name: string | null;
 }
 
-/** 主机元数据：服务端永不返回凭据明文。 */
+/** 主机元数据：服务端永不返回凭据明文。与桌面端云同步共用同一份存储。 */
 export interface SshHostMeta {
   id: string;
   name: string;
@@ -15,6 +15,11 @@ export interface SshHostMeta {
   /** 服务端是否持有加密凭据。false = 连接时需客户端临时提供（默认策略） */
   hasCredential: boolean;
   hasPassphrase: boolean;
+  /**
+   * true = 桌面端开启 E2EE 后同步上来的主机，服务端只有密文、无法解析。
+   * Web 端不能连接，仅展示存在（删除可同步 tombstone 回桌面端）。
+   */
+  encrypted: boolean;
   createdAt: number;
   updatedAt: number;
 }

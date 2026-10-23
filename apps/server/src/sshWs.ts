@@ -4,9 +4,8 @@ import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
 import type { RawData, WebSocket } from "ws";
 
 import { verifyToken } from "./auth";
-import { encryptSecret, newHostId } from "./credCrypto";
-import { db, nowMs, type SshHostRow } from "./db";
-import { loadCredential } from "./sshHosts";
+import { db, nowMs } from "./db";
+import { createHostRecord, loadHostTarget } from "./sshHosts";
 
 /**
  * Web 版 SSH 网关（**仅远程 SSH**，不做本地终端 / 串口）。
@@ -30,6 +29,8 @@ import { loadCredential } from "./sshHosts";
  *   - 只有用户显式勾选「保存到服务端」时，才走 AES-256-GCM 加密落盘；
  *   - 接口永不返回任何凭据明文。
  *   - 主机公钥指纹 Trust-On-First-Use，变更即拒绝（防中间人）。
+ *   - **主机与桌面端共用**：元数据存 user_items（kind='profile'），
+ *     桌面端云同步 push/pull 同一张表——任一端保存的主机另一端立即可见。
  */
 
 interface ConnectFrame {
@@ -97,6 +98,8 @@ function verifyHostKey(
 /**
  * 解析连接目标。
  *
+ * 主机元数据来自 user_items 的 profile（**与桌面端共用**），凭据来自 ssh_credentials。
+ *
  * **凭据优先级**：客户端本次连接内联提供的凭据 > 服务端已加密保存的凭据。
  * 内联凭据**只存在于本次连接的内存中**，绝不写库——这是「密钥永不上传」的默认路径：
  * 主机只登记元数据，每次连接时由用户在浏览器里输入，用完即弃。
@@ -121,14 +124,13 @@ function resolveTarget(
       : null;
 
   if (hostId) {
-    const cred = loadCredential(userId, hostId);
-    if (!cred) return { error: "主机不存在或凭据无法解密" };
+    const target0 = loadHostTarget(userId, hostId);
+    if (!target0) return { error: "主机不存在" };
 
-    const base = {
-      host: cred.row.host,
-      port: Number(cred.row.port),
-      username: cred.row.username,
-    };
+    const username = target0.username || (typeof frame.username === "string" ? frame.username.trim() : "");
+    if (!username) return { error: "该主机未保存用户名，请在连接参数中提供用户名" };
+
+    const base = { host: target0.host, port: target0.port, username };
 
     // 客户端本次临时提供：不读库、不落盘
     if (inlineSecret) {
@@ -138,20 +140,24 @@ function resolveTarget(
     }
 
     // 服务端没有保存过凭据（默认策略）→ 必须由客户端提供
-    if (cred.secret === null) {
+    if (target0.secret === null) {
       return {
-        error: authType === "key"
-          ? "该主机未保存凭据，请在客户端提供私钥后连接"
-          : "该主机未保存凭据，请在客户端输入密码后连接",
+        error:
+          target0.authType === "agent"
+            ? "该主机使用 SSH Agent 认证，服务端不持有凭据，请在客户端提供密码或私钥后连接"
+            : authType === "key"
+              ? "该主机未保存凭据，请在客户端提供私钥后连接"
+              : "该主机未保存凭据，请在客户端输入密码后连接",
       };
     }
 
+    // 服务端保存的是 agent 引用之外的密钥/密码；authType 以保存时为准
     return {
       target: {
         ...base,
-        authType: cred.row.auth_type === "key" ? "key" : "password",
-        secret: cred.secret,
-        passphrase: cred.passphrase,
+        authType: target0.authType === "key" ? "key" : "password",
+        secret: target0.secret,
+        passphrase: target0.passphrase,
       },
     };
   }
@@ -172,27 +178,16 @@ function resolveTarget(
     passphrase: inlinePassphrase,
   };
 
-  // 仅当用户显式勾选「保存到服务端」时才落盘（加密）
+  // 仅当用户显式勾选「保存到服务端」时才落盘（元数据进 user_items + 凭据加密）
   if (frame.save === true) {
-    const id = newHostId();
-    const ts = nowMs();
-    db.prepare(
-      `INSERT INTO ssh_hosts
-       (id, user_id, name, host, port, username, auth_type, secret_enc, passphrase_enc, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      userId,
-      `${username}@${host}`,
+    createHostRecord(userId, {
       host,
       port,
       username,
       authType,
-      encryptSecret(inlineSecret),
-      inlinePassphrase ? encryptSecret(inlinePassphrase) : null,
-      ts,
-      ts,
-    );
+      secret: inlineSecret,
+      passphrase: inlinePassphrase,
+    });
   }
 
   return { target };
@@ -369,6 +364,3 @@ export function registerSshWsRoutes(app: FastifyInstance): void {
     });
   });
 }
-
-// 保持与 sshHosts 的行类型引用一致（编译期校验表结构未漂移）
-export type { SshHostRow };

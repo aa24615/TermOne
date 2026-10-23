@@ -17,6 +17,22 @@ const app = Fastify({
 await app.register(cors, { origin: true });
 await app.register(import("@fastify/websocket"));
 
+// 容忍空 JSON body（如 DELETE 不带 body）：默认解析器会因
+// 「content-type 是 application/json 但 body 为空」返回 400。
+app.addContentTypeParser(
+  "application/json",
+  { bodyLimit: 8 * 1024 * 1024, parseAs: "string" },
+  (_req, body, done) => {
+    const text = typeof body === "string" ? body : body.toString("utf8");
+    if (!text.trim()) return done(null, {});
+    try {
+      done(null, JSON.parse(text));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  },
+);
+
 registerAuthRoutes(app);
 registerSyncRoutes(app);
 registerSshHostRoutes(app);

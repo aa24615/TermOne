@@ -302,6 +302,12 @@ export function HostDialog({ kind, host, onClose, onSaved, onConnect }: Props) {
               ：服务端只登记主机地址/用户名等元数据；连接时由本机临时提交，用完即弃。
             </>
           )}
+          {!isTemp && (
+            <>
+              <br />
+              主机信息与桌面端共用同一账号主机库：此处保存后，桌面端同步即可见，反之亦然。
+            </>
+          )}
         </p>
 
         {error && <p className="error">{error}</p>}

@@ -9,6 +9,9 @@ import type { SshHostMeta, UserDto } from "./types";
 
 /** 凭据存放位置：服务端加密 / 仅本机浏览器 / 未保存（连接时输入） */
 function credBadge(h: SshHostMeta): { text: string; cls: string; title: string } {
+  if (h.encrypted) {
+    return { text: "E2EE", cls: "badge e2ee", title: "桌面端开启了端到端加密同步，服务端只有密文，Web 端无法查看与连接" };
+  }
   if (h.hasCredential) {
     return { text: "服务端", cls: "badge server", title: "凭据已 AES-256-GCM 加密保存在服务端" };
   }
@@ -54,6 +57,10 @@ export function App() {
 
   /** 打开主机：优先服务端凭据 → 本机缓存 → 弹窗手动输入（默认路径） */
   const openHost = (h: SshHostMeta) => {
+    if (h.encrypted) {
+      setError(`「${h.name}」是桌面端加密同步的主机，服务端只有密文，Web 端无法连接。如需在浏览器使用，请在桌面端关闭该账号的 E2EE 后重新同步，或在 Web 端重新添加。`);
+      return;
+    }
     const label = `${h.username}@${h.host}`;
     if (h.hasCredential) return connect(label, { hostId: h.id });
     const local = getLocalCred(h.id);
@@ -90,11 +97,11 @@ export function App() {
           {hosts.map((h) => {
             const badge = credBadge(h);
             return (
-              <div key={h.id} className="host-item">
+              <div key={h.id} className={`host-item${h.encrypted ? " encrypted" : ""}`}>
                 <button
                   className="host-main"
                   onClick={() => openHost(h)}
-                  title={`${h.username}@${h.host}:${h.port}`}
+                  title={h.encrypted ? "E2EE 加密主机，Web 端无法连接" : `${h.username}@${h.host}:${h.port}`}
                 >
                   <span className="host-name">
                     {h.name}
@@ -103,13 +110,17 @@ export function App() {
                     </em>
                   </span>
                   <span className="host-sub">
-                    {h.username}@{h.host}:{h.port} · {h.authType === "key" ? "私钥" : "密码"}
+                    {h.encrypted
+                      ? "桌面端 E2EE 加密同步 · Web 端不可见"
+                      : `${h.username}@${h.host}:${h.port} · ${h.authType === "key" ? "私钥" : "密码"}`}
                   </span>
                 </button>
                 <span className="host-ops">
-                  <button className="btn-ghost" onClick={() => setDialog({ kind: "edit", host: h })}>
-                    编辑
-                  </button>
+                  {!h.encrypted && (
+                    <button className="btn-ghost" onClick={() => setDialog({ kind: "edit", host: h })}>
+                      编辑
+                    </button>
+                  )}
                   {badge.text === "仅本机" && (
                     <button
                       className="btn-ghost"
@@ -126,7 +137,7 @@ export function App() {
                   <button
                     className="btn-ghost danger"
                     onClick={async () => {
-                      if (!confirm(`删除主机「${h.name}」？`)) return;
+                      if (!confirm(`删除主机「${h.name}」？该删除会同步到桌面端。`)) return;
                       try {
                         await api.deleteHost(h.id);
                         clearLocalCred(h.id);
@@ -172,6 +183,9 @@ export function App() {
             <h2>SSH 远程管理</h2>
             <p>从左侧选择一台主机开始连接，或用「临时连接」不登记、不保存直接连。</p>
             <ul>
+              <li>
+                <strong>与桌面端共用主机库</strong>：这里保存的主机，桌面端登录同一账号同步后即可见，反之亦然
+              </li>
               <li>
                 <strong>凭据默认不上传</strong>
                 ：主机只登记地址/用户名，连接时由本机临时提交，服务端用完即弃
