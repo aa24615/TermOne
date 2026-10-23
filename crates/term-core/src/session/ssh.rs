@@ -33,6 +33,10 @@ pub(crate) fn spawn(
     user: Option<String>,
     auth: SshAuth,
     command: Option<String>,
+    proxy_jump: Option<String>,
+    local_forward: Option<String>,
+    remote_forward: Option<String>,
+    dynamic_forward: Option<u16>,
     closing: Arc<AtomicBool>,
     output: OutputSink,
     exit: ExitSink,
@@ -54,6 +58,30 @@ pub(crate) fn spawn(
             argv.push("-o".into());
             argv.push("IdentitiesOnly=yes".into());
         }
+    }
+    // R-10 Jump Host / ProxyJump
+    if let Some(pj) = &proxy_jump {
+        if !pj.is_empty() {
+            argv.push("-J".into());
+            argv.push(pj.clone());
+        }
+    }
+    // R-06 端口转发 / 隧道
+    if let Some(lf) = &local_forward {
+        if !lf.is_empty() {
+            argv.push("-L".into());
+            argv.push(lf.clone());
+        }
+    }
+    if let Some(rf) = &remote_forward {
+        if !rf.is_empty() {
+            argv.push("-R".into());
+            argv.push(rf.clone());
+        }
+    }
+    if let Some(dp) = dynamic_forward {
+        argv.push("-D".into());
+        argv.push(dp.to_string());
     }
     argv.push(match &user {
         Some(u) if !u.is_empty() => format!("{u}@{host}"),

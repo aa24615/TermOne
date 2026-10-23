@@ -1,6 +1,18 @@
 import { useStore } from "../store";
-import type { ProfileConfig } from "../types";
+import { firstLeaf } from "../paneTree";
+import type { ProfileConfig, Tab } from "../types";
 import { IconPlus, IconX } from "./icons";
+
+function tabMeta(t: Tab) {
+  const leaf = firstLeaf(t.layout);
+  return {
+    kind: leaf.kind,
+    profileId: leaf.profileId,
+    title: leaf.title,
+    sessionTitle: leaf.sessionTitle,
+    exitInfo: leaf.exitInfo,
+  };
+}
 
 export function TabBar() {
   const tabs = useStore((s) => s.tabs);
@@ -14,33 +26,34 @@ export function TabBar() {
   const tabNumbers = new Map<string, number>();
   let seq = 0;
   for (const t of tabs) {
-    if (t.kind !== "welcome") tabNumbers.set(t.id, ++seq);
+    if (tabMeta(t).kind !== "welcome") tabNumbers.set(t.id, ++seq);
   }
 
   return (
     <div className="tabbar">
       <div className="tabs">
         {tabs.map((t) => {
-          const profile = t.profileId ? profiles.find((p) => p.id === t.profileId) : undefined;
+          const m = tabMeta(t);
+          const profile = m.profileId ? profiles.find((p) => p.id === m.profileId) : undefined;
           const color = profile ? (profile.config as ProfileConfig).color : undefined;
           return (
           <div
             key={t.id}
-            className={`tab${t.id === activeTabId ? " active" : ""}${t.exitInfo ? " ended" : ""}`}
+            className={`tab${t.id === activeTabId ? " active" : ""}${m.exitInfo ? " ended" : ""}`}
             onClick={() => setActiveTab(t.id)}
             onAuxClick={(e) => {
               if (e.button === 1) closeTab(t.id);
             }}
-            title={t.sessionTitle ?? t.title}
+            title={m.sessionTitle ?? m.title}
           >
             <span
-              className={`tab-dot dot-${t.kind}`}
+              className={`tab-dot dot-${m.kind}`}
               style={color ? { background: color } : undefined}
             />
             {tabNumbers.has(t.id) && (
               <span className="tab-index">{tabNumbers.get(t.id)}</span>
             )}
-            <span className="tab-title">{t.title}</span>
+            <span className="tab-title">{m.title}</span>
             <button
               className="tab-close"
               title="关闭"

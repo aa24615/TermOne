@@ -7,9 +7,11 @@ mod local;
 mod serial;
 mod shells;
 mod ssh;
+pub mod sftp;
 
 pub use serial::{list_ports, PortInfo};
 pub use shells::{list_shells, ShellInfo};
+pub use sftp::{SftpAuth, SftpEntry, SftpRequest};
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -70,6 +72,14 @@ pub enum SessionRequest {
         user: Option<String>,
         auth: SshAuth,
         command: Option<String>,
+        #[serde(default)]
+        proxy_jump: Option<String>,
+        #[serde(default)]
+        local_forward: Option<String>,
+        #[serde(default)]
+        remote_forward: Option<String>,
+        #[serde(default)]
+        dynamic_forward: Option<u16>,
     },
     Serial {
         path: String,
@@ -179,8 +189,24 @@ impl SessionManager {
                 user,
                 auth,
                 command,
+                proxy_jump,
+                local_forward,
+                remote_forward,
+                dynamic_forward,
             } => ssh::spawn(
-                id, host, port, user, auth, command, closing.clone(), output, exit,
+                id,
+                host,
+                port,
+                user,
+                auth,
+                command,
+                proxy_jump,
+                local_forward,
+                remote_forward,
+                dynamic_forward,
+                closing.clone(),
+                output,
+                exit,
             )?,
             SessionRequest::Serial {
                 path,

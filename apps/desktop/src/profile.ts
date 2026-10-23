@@ -3,6 +3,8 @@ import type {
   ProfileConfig,
   ProfileKind,
   ProfileRow,
+  SftpAuthRequest,
+  SftpRequest,
   SerialProfileConfig,
   SessionRequest,
   SshProfileConfig,
@@ -105,6 +107,10 @@ export function buildSessionRequest(profile?: ProfileRow): SessionRequest {
             ? { type: "key", identityFile: c.identityFile ?? "" }
             : { type: c.auth },
         command: undefined,
+        proxyJump: c.proxyJump || null,
+        localForward: c.localForward || null,
+        remoteForward: c.remoteForward || null,
+        dynamicForward: c.dynamicForward ?? null,
       };
     }
     case "serial": {
@@ -120,4 +126,21 @@ export function buildSessionRequest(profile?: ProfileRow): SessionRequest {
       };
     }
   }
+}
+
+/** 从 SSH 档案组装 SFTP 连接参数（R-01）。
+ *  密码认证不适用于非交互批处理，统一降级为 agent；用户在 SSH 档案中应使用
+ *  密钥或已解锁的 ssh-agent。 */
+export function buildSftpRequest(profile?: ProfileRow): SftpRequest | null {
+  if (!profile || profile.kind !== "ssh") return null;
+  const c = profile.config as SshProfileConfig;
+  const auth: SftpAuthRequest =
+    c.auth === "key" ? { type: "key", identityFile: c.identityFile ?? "" } : { type: "agent" };
+  return {
+    host: c.host,
+    port: c.port || 22,
+    user: c.user || undefined,
+    auth,
+    proxyJump: c.proxyJump || undefined,
+  };
 }

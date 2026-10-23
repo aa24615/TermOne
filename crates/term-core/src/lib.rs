@@ -9,7 +9,8 @@ pub mod storage;
 pub use error::{Result, TermError};
 pub use reconnect::{KeepAlivePolicy, ReconnectPolicy};
 pub use session::{
-    default_shell, list_ports, list_shells, ExitSink, OutputSink, PortInfo, ShellInfo,
-    SessionId, SessionInfo, SessionKind, SessionManager, SessionRequest, SshAuth,
+    default_shell, list_ports, list_shells, ExitSink, OutputSink, PortInfo, SftpAuth, SftpEntry,
+    SftpRequest, ShellInfo, SessionId, SessionInfo, SessionKind, SessionManager,
+    SessionRequest, SshAuth,
 };
 pub use storage::{BackupStats, Db, GroupRow, ProfileRow, SettingRow, SnippetRow, SyncItem};

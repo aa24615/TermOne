@@ -1,10 +1,16 @@
 import { profileSubtitle } from "../profile";
 import { useStore } from "../store";
+import { firstLeaf } from "../paneTree";
 import type { ProfileRow, Tab } from "../types";
 
 function describeTarget(tab: Tab, profile?: ProfileRow): string {
+  const leaf = firstLeaf(tab.layout);
   if (profile) return `${profile.name} — ${profileSubtitle(profile)}`;
-  return tab.sessionTitle ?? tab.title;
+  return leaf.sessionTitle ?? leaf.title;
+}
+
+function hasSession(tab: Tab): boolean {
+  return firstLeaf(tab.layout).sessionId !== null;
 }
 
 export function StatusBar() {
@@ -15,9 +21,10 @@ export function StatusBar() {
   const appInfo = useStore((s) => s.appInfo);
 
   const tab = tabs.find((t) => t.id === activeTabId);
-  const profile = tab?.profileId ? profiles.find((p) => p.id === tab.profileId) : undefined;
+  const leaf = tab ? firstLeaf(tab.layout) : null;
+  const profile = leaf?.profileId ? profiles.find((p) => p.id === leaf.profileId) : undefined;
   const target =
-    tab && tab.kind !== "welcome" ? describeTarget(tab, profile) : "准备就绪";
+    tab && leaf && leaf.kind !== "welcome" ? describeTarget(tab, profile) : "准备就绪";
 
   const syncLabel = auth.syncing
     ? "同步中…"
@@ -29,7 +36,7 @@ export function StatusBar() {
 
   return (
     <footer className="statusbar">
-      <span className={`status-dot${tab?.sessionId ? " ok" : ""}`} />
+      <span className={`status-dot${tab && hasSession(tab) ? " ok" : ""}`} />
       <span className="status-target" title={target}>
         {target}
       </span>

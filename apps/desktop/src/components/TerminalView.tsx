@@ -9,7 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 import { fromB64, ipc, toB64 } from "../ipc";
 import { useStore } from "../store";
 import { getTermTheme } from "../themes";
-import type { Tab } from "../types";
+import type { Pane } from "../types";
 
 interface OutputPayload {
   id: string;
@@ -21,7 +21,7 @@ interface ExitPayload {
   code: number | null;
 }
 
-export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
+export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -57,7 +57,7 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
       // 容器尺寸尚未就绪时忽略
     }
 
-    const sessionId = tab.sessionId;
+    const sessionId = pane.sessionId;
     const dataDisposer = term.onData((d) => {
       // 输入任意内容（含回车）时清除意外触发/残留的文本选区
       if (term.hasSelection()) term.clearSelection();
@@ -119,7 +119,7 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
       fitScheduled = true;
       requestAnimationFrame(() => {
         fitScheduled = false;
-        if (useStore.getState().activeTabId !== tab.id) return;
+        if (useStore.getState().activePaneId !== pane.id) return;
         try {
           fit.fit();
         } catch {
@@ -141,9 +141,9 @@ export function TerminalView({ tab, active }: { tab: Tab; active: boolean }) {
       termRef.current = null;
       fitRef.current = null;
     };
-    // 仅随标签页挂载/卸载一次
+    // 仅随面板挂载/卸载一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id]);
+  }, [pane.id]);
 
   useEffect(() => {
     const term = termRef.current;

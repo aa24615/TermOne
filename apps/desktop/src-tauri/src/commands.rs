@@ -1,14 +1,16 @@
 //! Tauri 命令层：把前端 invoke 桥接到 term-core。
 
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use term_core::{
     list_ports, list_shells, secrets, BackupStats, GroupRow, ProfileRow, SessionInfo,
-    SessionRequest, SettingRow, SyncItem,
+    SessionRequest, SettingRow, SftpEntry, SftpRequest, SyncItem,
 };
 
 use crate::state::AppState;
@@ -100,10 +102,60 @@ pub async fn session_open(
     req: SessionRequest,
 ) -> CmdResult<SessionInfo> {
     let (output, exit) = make_sinks(&app);
+
+    // 会话日志：开启 logSessions 设置时，把输出字节同时写入本地日志文件，供回放。
+    let do_log = state
+        .db
+        .lock()
+        .unwrap()
+        .setting_get("logSessions")
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(false);
+    let log_file = if do_log { open_session_log(&app).ok() } else { None };
+    let output: term_core::OutputSink = match log_file {
+        Some(mut f) => {
+            let inner = output.clone();
+            Arc::new(move |id, data| {
+                inner(id, data.clone());
+                let _ = f.write_all(&data);
+                let _ = f.flush();
+            })
+        }
+        None => output,
+    };
+
     state
         .sessions
         .open(req, output, exit)
         .map_err(|e| e.to_string())
+}
+
+/// 在应用数据目录下创建 `logs/<uuid>.log`，返回可写文件句柄。
+fn open_session_log(app: &AppHandle) -> Result<File, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.log", uuid::Uuid::new_v4()));
+    File::create(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn session_log_read(app: AppHandle, id: String) -> CmdResult<String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs");
+    let path = dir.join(format!("{}.log", id));
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(s),
+        Err(_) => Ok(String::new()),
+    }
 }
 
 #[tauri::command]
@@ -138,6 +190,90 @@ pub async fn session_close(state: State<'_, AppState>, id: String) -> CmdResult<
         .sessions
         .close(parse_id(&id)?)
         .map_err(|e| e.to_string())
+}
+
+// ---------------- SFTP 图形化文件管理（R-01） ----------------
+
+#[tauri::command]
+pub async fn sftp_list(req: SftpRequest, path: String) -> CmdResult<Vec<SftpEntry>> {
+    req.list(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(req: SftpRequest, path: String) -> CmdResult<()> {
+    req.mkdir(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_remove(req: SftpRequest, path: String, is_dir: bool) -> CmdResult<()> {
+    if is_dir {
+        req.remove_dir(&path)
+    } else {
+        req.remove_file(&path)
+    }
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_rename(req: SftpRequest, from: String, to: String) -> CmdResult<()> {
+    req.rename(&from, &to).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_download(req: SftpRequest, remote: String, local: String) -> CmdResult<()> {
+    req.download(&remote, &local).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_upload(req: SftpRequest, local: String, remote: String) -> CmdResult<()> {
+    req.upload(&local, &remote).map_err(|e| e.to_string())
+}
+
+// ---------------- 本地文件浏览（SFTP 面板的本地侧栏） ----------------
+
+#[derive(Serialize)]
+struct LocalEntry {
+    name: String,
+    is_dir: bool,
+    size: u64,
+    /// 修改时间（Unix 毫秒）
+    mtime: i64,
+}
+
+#[tauri::command]
+pub async fn local_list(path: String) -> CmdResult<Vec<LocalEntry>> {
+    let p = std::path::Path::new(&path);
+    let mut entries = Vec::new();
+    let mut read = std::fs::read_dir(p).map_err(|e| format!("无法读取目录 {}: {}", path, e))?;
+    while let Some(Ok(e)) = read.next() {
+        let meta = match e.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let is_dir = meta.is_dir();
+        let size = if is_dir { 0 } else { meta.len() };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        entries.push(LocalEntry {
+            name: e.file_name().to_string_lossy().into_owned(),
+            is_dir,
+            size,
+            mtime,
+        });
+    }
+    entries.sort_by(|a, b| {
+        (b.is_dir, a.name.to_lowercase()).cmp(&(a.is_dir, b.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn local_mkdir(path: String) -> CmdResult<()> {
+    std::fs::create_dir_all(&path).map_err(|e| format!("无法创建目录 {}: {}", path, e))
 }
 
 // ---------------- 档案 ----------------

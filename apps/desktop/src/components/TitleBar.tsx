@@ -3,11 +3,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useStore } from "../store";
 import { isTauri } from "../env";
-import { IconMinus, IconSquare, IconX } from "./icons";
+import { firstLeaf } from "../paneTree";
+import { IconFolder, IconMinus, IconSquare, IconX } from "./icons";
 
 export function TitleBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTabId = useStore((s) => s.activeTabId);
+  const sftpOpen = useStore((s) => s.sftpOpen);
+  const toggleSftp = useStore((s) => s.toggleSftp);
   const [isMac, setIsMac] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -31,7 +34,8 @@ export function TitleBar() {
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
-  const title = activeTab && activeTab.kind !== "welcome" ? activeTab.title : "TermOne";
+  const activeLeaf = activeTab ? firstLeaf(activeTab.layout) : null;
+  const title = activeLeaf && activeLeaf.kind !== "welcome" ? activeLeaf.title : "TermOne";
 
   return (
     <header className={`titlebar${isMac ? " mac" : ""}`}>
@@ -41,6 +45,17 @@ export function TitleBar() {
       </div>
       <div className="titlebar-title" data-tauri-drag-region>
         {title}
+      </div>
+      <div className="titlebar-tools">
+        <button
+          className={`titlebar-tool${sftpOpen ? " active" : ""}`}
+          aria-label="SFTP 文件管理"
+          title="SFTP 文件管理"
+          onClick={toggleSftp}
+        >
+          <IconFolder size={15} />
+          <span className="titlebar-tool-label">文件</span>
+        </button>
       </div>
       {!isMac && (
         <div className="win-controls">

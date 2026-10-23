@@ -23,6 +23,14 @@ export interface SshProfileConfig extends ProfileConfigBase {
   user?: string;
   auth: "agent" | "password" | "key";
   identityFile?: string;
+  /** Jump Host / ProxyJump，如 `user@bastion:22` 或 `bastion`（R-10） */
+  proxyJump?: string;
+  /** 本地端口转发 -L，如 `8080:localhost:80`（R-06） */
+  localForward?: string;
+  /** 远程端口转发 -R，如 `8080:localhost:80`（R-06） */
+  remoteForward?: string;
+  /** 动态（SOCKS）转发 -D 端口（R-06） */
+  dynamicForward?: number;
 }
 
 export interface SerialProfileConfig extends ProfileConfigBase {
@@ -84,6 +92,11 @@ export type SshAuthRequest =
   | { type: "password" }
   | { type: "key"; identityFile: string };
 
+/** 远端认证（SFTP 仅支持 agent / key；密码认证不适配非交互批处理） */
+export type SftpAuthRequest =
+  | { type: "agent" }
+  | { type: "key"; identityFile: string };
+
 export type SessionRequest =
   | { kind: "local"; shell?: string; args: string[]; cwd?: string }
   | {
@@ -93,6 +106,10 @@ export type SessionRequest =
       user?: string;
       auth: SshAuthRequest;
       command?: string;
+      proxyJump?: string | null;
+      localForward?: string | null;
+      remoteForward?: string | null;
+      dynamicForward?: number | null;
     }
   | {
       kind: "serial";
@@ -110,6 +127,46 @@ export interface SerialPortDto {
   manufacturer?: string;
 }
 
+/** SFTP 连接参数（由前端从 SSH 档案组装） */
+export interface SftpRequest {
+  host: string;
+  port: number;
+  user?: string;
+  auth: SftpAuthRequest;
+  proxyJump?: string;
+}
+
+/** 远端目录项（R-01） */
+export interface SftpEntry {
+  name: string;
+  isDir: boolean;
+  isLink: boolean;
+  size: number;
+  mode: string;
+  owner: string;
+  group: string;
+  mtime: string;
+}
+
+/** 本地目录项（SFTP 面板的本地侧栏） */
+export interface LocalEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+  mtime: number;
+}
+
+export type TransferKind = "download" | "upload";
+export type TransferStatus = "running" | "done" | "error";
+
+export interface TransferItem {
+  id: string;
+  kind: TransferKind;
+  name: string;
+  status: TransferStatus;
+  error?: string;
+}
+
 export interface ShellInfoDto {
   name: string;
   path: string;
@@ -123,7 +180,8 @@ export interface AppInfoDto {
   arch: string;
 }
 
-export interface Tab {
+/** 一个面板 = 一个终端会话视图（分屏中的最小单元） */
+export interface Pane {
   id: string;
   kind: ProfileKind | "welcome";
   sessionId: string | null;
@@ -131,6 +189,17 @@ export interface Tab {
   profileId: string | null;
   title: string;
   exitInfo: string | null;
+}
+
+/** 分屏布局树：叶子是面板，split 节点容纳子节点。 */
+export type PaneNode =
+  | { type: "leaf"; id: string; pane: Pane }
+  | { type: "split"; id: string; dir: "row" | "col"; children: PaneNode[]; sizes: number[] };
+
+/** 顶层标签页：内嵌一棵分屏布局树（欢迎页是单个 welcome 叶子） */
+export interface Tab {
+  id: string;
+  layout: PaneNode;
 }
 
 export interface AppSettings {
@@ -142,6 +211,8 @@ export interface AppSettings {
   serverUrl: string;
   autoSync: boolean;
   confirmClose: boolean;
+  logSessions: boolean;
+  e2eeEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -154,6 +225,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: "http://127.0.0.1:8787",
   autoSync: true,
   confirmClose: true,
+  logSessions: false,
+  e2eeEnabled: false,
 };
 
 export const THEME_NAMES: Record<string, string> = {

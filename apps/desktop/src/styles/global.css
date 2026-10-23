@@ -502,6 +502,141 @@ textarea {
   height: 100%;
 }
 
+/* ===== 分屏（Split Panes, R-03） ===== */
+.split {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-row {
+  flex-direction: row;
+}
+
+.split-col {
+  flex-direction: column;
+}
+
+.pane-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pane.active {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.splitter {
+  flex: 0 0 auto;
+  background: var(--border);
+  z-index: 6;
+}
+
+.splitter-v {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.splitter-h {
+  height: 6px;
+  cursor: row-resize;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
+}
+
+.pane-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  background: linear-gradient(var(--bg-elev), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 5;
+}
+
+.pane:hover .pane-bar {
+  opacity: 1;
+}
+
+.pane-bar-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.pane-bar-actions .icon-btn {
+  pointer-events: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--text-dim);
+  background: transparent;
+}
+
+.pane-bar-actions .icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pane-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.log-view {
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .term-end {
   position: absolute;
   top: 50%;
@@ -1268,4 +1403,330 @@ input[type="checkbox"] {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ============ 标题栏工具（SFTP 开关） ============ */
+
+.titlebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  flex: none;
+}
+
+.titlebar-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.titlebar-tool:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.titlebar-tool.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.titlebar-tool-label {
+  line-height: 1;
+}
+
+/* ============ SFTP 文件管理抽屉（R-01） ============ */
+
+.sftp-drawer {
+  flex: none;
+  width: 380px;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+}
+
+.sftp-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sftp-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.sftp-profile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sftp-label {
+  color: var(--fg-dim);
+  font-size: 12px;
+  flex: none;
+}
+
+.sftp-select-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.sftp-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  padding: 5px 24px 5px 8px;
+  font-size: 12.5px;
+}
+
+.sftp-select-caret {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--fg-dim);
+}
+
+.sftp-note.warn {
+  margin: 8px 12px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sftp-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sftp-pane:last-child {
+  border-bottom: none;
+}
+
+.sftp-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px 5px 12px;
+}
+
+.sftp-pane-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.sftp-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sftp-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sftp-btn:hover {
+  background: var(--bg-hover);
+}
+
+.sftp-crumbs {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.sftp-crumbs.local {
+  overflow: hidden;
+}
+
+.sftp-crumb {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.sftp-crumbs.local .sftp-crumb {
+  cursor: default;
+  max-width: 100%;
+}
+
+.sftp-crumb:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.sftp-crumb-sep {
+  color: var(--fg-faint);
+}
+
+.sftp-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+  padding: 4px 0;
+}
+
+.sftp-status {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.sftp-status.error {
+  color: var(--danger);
+}
+
+.sftp-status.muted {
+  color: var(--fg-faint);
+}
+
+.sftp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  cursor: default;
+}
+
+.sftp-row:hover {
+  background: var(--bg-hover);
+}
+
+.sftp-row.selected {
+  background: var(--accent-soft);
+}
+
+.sftp-row.selected .sftp-name {
+  color: var(--accent);
+}
+
+.sftp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-name.dir {
+  font-weight: 600;
+}
+
+.sftp-size {
+  flex: none;
+  width: 64px;
+  text-align: right;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sftp-mtime {
+  flex: none;
+  width: 92px;
+  text-align: right;
+  color: var(--fg-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sftp-pane.transfers {
+  flex: 0 0 auto;
+  max-height: 30%;
+}
+
+.sftp-xfer-status {
+  flex: none;
+  font-size: 11px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-xfer-status.running {
+  color: var(--fg-dim);
+}
+
+.sftp-xfer-status.done {
+  color: var(--ok);
+}
+
+.sftp-xfer-status.error {
+  color: var(--danger);
+}
+
+.icon-btn:disabled,
+.sftp-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--fg-dim);
+}
+
+.sftp-crumb:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppInfoDto,
   GroupRow,
+  LocalEntry,
   ProfileRow,
+  SftpEntry,
+  SftpRequest,
   SerialPortDto,
   SessionInfo,
   SessionRequest,
@@ -42,6 +45,25 @@ export const ipc = {
   sessionResize: (id: string, cols: number, rows: number) =>
     invoke<void>("session_resize", { id, cols, rows }),
   sessionClose: (id: string) => invoke<void>("session_close", { id }),
+  sessionLogRead: (id: string) => invoke<string>("session_log_read", { id }),
+
+  // SFTP 图形化文件管理（R-01）
+  sftpList: (req: SftpRequest, path: string) =>
+    invoke<SftpEntry[]>("sftp_list", { req, path }),
+  sftpMkdir: (req: SftpRequest, path: string) =>
+    invoke<void>("sftp_mkdir", { req, path }),
+  sftpRemove: (req: SftpRequest, path: string, isDir: boolean) =>
+    invoke<void>("sftp_remove", { req, path, isDir }),
+  sftpRename: (req: SftpRequest, from: string, to: string) =>
+    invoke<void>("sftp_rename", { req, from, to }),
+  sftpDownload: (req: SftpRequest, remote: string, local: string) =>
+    invoke<void>("sftp_download", { req, remote, local }),
+  sftpUpload: (req: SftpRequest, local: string, remote: string) =>
+    invoke<void>("sftp_upload", { req, local, remote }),
+
+  // 本地文件浏览（SFTP 面板本地侧栏）
+  localList: (path: string) => invoke<LocalEntry[]>("local_list", { path }),
+  localMkdir: (path: string) => invoke<void>("local_mkdir", { path }),
 
   profileList: () => invoke<ProfileRow[]>("profile_list"),
   profileSave: (profile: ProfileRow) => invoke<ProfileRow>("profile_save", { profile }),

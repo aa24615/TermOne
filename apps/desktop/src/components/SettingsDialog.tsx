@@ -21,6 +21,8 @@ export function SettingsDialog() {
   const setDialog = useStore((s) => s.setDialog);
   const showToast = useStore((s) => s.showToast);
   const reloadAfterImport = useStore((s) => s.reloadAfterImport);
+  const enableE2ee = useStore((s) => s.enableE2ee);
+  const disableE2ee = useStore((s) => s.disableE2ee);
 
   const handleExport = async () => {
     try {
@@ -166,6 +168,46 @@ export function SettingsDialog() {
           onChange={(e) => void saveSetting("autoSync", e.target.checked)}
         />
 
+        <span className="form-span section-title">端到端加密（E2EE）</span>
+
+        <label>启用加密</label>
+        <input
+          type="checkbox"
+          checked={settings.e2eeEnabled}
+          onChange={(e) => {
+            if (e.target.checked) {
+              const pass = window.prompt("设置同步加密口令（仅存于内存，服务端零知识）");
+              if (pass) enableE2ee(pass);
+            } else {
+              disableE2ee();
+            }
+          }}
+        />
+
+        {settings.e2eeEnabled && (
+          <>
+            <label>解锁口令</label>
+            <div className="input-row">
+              <input
+                type="password"
+                placeholder="重新输入口令以解密"
+                onBlur={(e) => {
+                  if (e.target.value) {
+                    enableE2ee(e.target.value);
+                    e.target.value = "";
+                  }
+                }}
+              />
+              <span className="form-hint">重启后需重新输入</span>
+            </div>
+          </>
+        )}
+        <span className="form-span">
+          <p className="form-hint">
+            开启后同步数据在本地加密，服务端仅存储密文、无法读取内容；口令不落盘，更换设备需用同一口令解密。
+          </p>
+        </span>
+
         <span className="form-span section-title">窗口</span>
 
         <label>退出前确认</label>
@@ -174,6 +216,18 @@ export function SettingsDialog() {
           checked={settings.confirmClose}
           onChange={(e) => void saveSetting("confirmClose", e.target.checked)}
         />
+
+        <label>记录会话日志</label>
+        <input
+          type="checkbox"
+          checked={settings.logSessions}
+          onChange={(e) => void saveSetting("logSessions", e.target.checked)}
+        />
+        <span className="form-span">
+          <p className="form-hint">
+            开启后，会话输出会写入本地日志文件，可在面板工具条点击「日志」回放查看。
+          </p>
+        </span>
       </div>
     </Modal>
   );

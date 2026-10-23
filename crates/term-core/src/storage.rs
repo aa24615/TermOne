@@ -698,6 +698,20 @@ impl Db {
         Ok(())
     }
 
+    /// 读取单个设置值；不存在返回 None。
+    pub fn setting_get(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(TermError::Db)?;
+        Ok(value)
+    }
+
     // ---------------- sync ----------------
 
     /// 导出所有待推送（dirty）的变更。

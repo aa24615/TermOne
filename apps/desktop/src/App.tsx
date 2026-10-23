@@ -3,24 +3,24 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { AboutDialog } from "./components/AboutDialog";
 import { AccountDialog } from "./components/AccountDialog";
+import { FileManager } from "./components/FileManager";
 import { Modal } from "./components/Dialog";
 import { ProfileDialog } from "./components/ProfileDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
-import { TerminalView } from "./components/TerminalView";
 import { Toasts } from "./components/Toasts";
 import { TitleBar } from "./components/TitleBar";
-import { WelcomePane } from "./components/WelcomePane";
+import { PaneView } from "./components/PaneView";
 import { isTauri } from "./env";
+import { allLeaves } from "./paneTree";
 import { useStore } from "./store";
 
 export default function App() {
   const init = useStore((s) => s.init);
   const tabs = useStore((s) => s.tabs);
   const activeTabId = useStore((s) => s.activeTabId);
-  const closeTab = useStore((s) => s.closeTab);
   const dialog = useStore((s) => s.dialog);
   const [confirmExit, setConfirmExit] = useState(false);
   const closingRef = useRef(false);
@@ -54,6 +54,18 @@ export default function App() {
         return;
       }
 
+      // Alt+Shift 组合：分屏（终端聚焦时也可用，阻止作为 ESC 序列下发）
+      if (alt && e.shiftKey && ["h", "v", "x"].includes(k)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const pid = s.activePaneId;
+        if (!pid) return;
+        if (k === "h") void s.splitPane(pid, "col");
+        else if (k === "v") void s.splitPane(pid, "row");
+        else if (k === "x") s.closePane(pid);
+        return;
+      }
+
       if (!mod) return;
       // 终端聚焦时，Ctrl+W（删除前一个词）、Ctrl+T（交换字符）等是 Shell
       // 的编辑键，必须交还 Shell 处理；输入框聚焦时同样放行，避免误关标签页
@@ -74,7 +86,10 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
-  const openCount = tabs.filter((t) => t.sessionId).length;
+  const openCount = tabs.reduce(
+    (n, t) => n + allLeaves(t.layout).filter((p) => p.sessionId).length,
+    0,
+  );
 
   // 只订阅一次关闭请求，避免频繁重订阅导致监听器泄漏（泄漏的旧监听器会
   // 用过期状态重复 preventDefault，使退出流程卡死）
@@ -86,7 +101,9 @@ export default function App() {
       .onCloseRequested((event) => {
         if (closingRef.current) return;
         const st = useStore.getState();
-        const hasRunning = st.tabs.some((t) => t.sessionId);
+        const hasRunning = st.tabs.some((t) =>
+          allLeaves(t.layout).some((p) => p.sessionId),
+        );
         if (st.settings.confirmClose && hasRunning) {
           event.preventDefault();
           setConfirmExit(true);
@@ -112,26 +129,13 @@ export default function App() {
           <div className="term-stack">
             {tabs.map((t) => (
               <div key={t.id} className={`term-page${t.id === activeTabId ? " active" : ""}`}>
-                {t.kind === "welcome" ? (
-                  <WelcomePane />
-                ) : (
-                  <>
-                    <TerminalView tab={t} active={t.id === activeTabId} />
-                    {t.exitInfo && (
-                      <div className="term-end">
-                        <span>{t.exitInfo}</span>
-                        <button className="btn small" onClick={() => closeTab(t.id)}>
-                          关闭标签页
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
+                <PaneView node={t.layout} tabId={t.id} />
               </div>
             ))}
           </div>
           <StatusBar />
         </main>
+        <FileManager />
       </div>
 
       {dialog?.type === "profile" && <ProfileDialog profileId={dialog.profileId} />}

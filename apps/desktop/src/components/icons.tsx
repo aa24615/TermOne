@@ -116,3 +116,23 @@ export const IconInfo = ({ size, className }: IconProps) => (
     <path d="M12 11v5M12 7.5v.5" />
   </svg>
 );
+
+export const IconSplitV = ({ size, className }: IconProps) => (
+  <svg {...base(size, className)}>
+    <rect x="3" y="4" width="18" height="16" rx="1.5" />
+    <path d="M12 4v16" />
+  </svg>
+);
+
+export const IconSplitH = ({ size, className }: IconProps) => (
+  <svg {...base(size, className)}>
+    <rect x="3" y="4" width="18" height="16" rx="1.5" />
+    <path d="M3 12h18" />
+  </svg>
+);
+
+export const IconFolder = ({ size, className }: IconProps) => (
+  <svg {...base(size, className)}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+  </svg>
+);

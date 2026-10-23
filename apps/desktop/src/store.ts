@@ -1,16 +1,31 @@
 import { create } from "zustand";
 
+import { decryptData, encryptData, isEncrypted } from "./crypto";
 import { ipc } from "./ipc";
-import { buildSessionRequest } from "./profile";
+import {
+  allLeaves,
+  findPane,
+  leafNode,
+  newPane,
+  removeLeaf,
+  setSplitSizes,
+  splitLeaf,
+  updatePaneBySession,
+} from "./paneTree";
+import { buildSessionRequest, buildSftpRequest } from "./profile";
 import {
   DEFAULT_SETTINGS,
   type AppInfoDto,
   type AppSettings,
   type GroupRow,
+  type LocalEntry,
+  type Pane,
   type ProfileRow,
+  type SftpEntry,
   type SettingRow,
   type SyncItem,
   type Tab,
+  type TransferItem,
 } from "./types";
 
 const AUTH_KEY = "termone.auth";
@@ -50,9 +65,12 @@ interface TermStore {
   groups: GroupRow[];
   tabs: Tab[];
   activeTabId: string | null;
+  activePaneId: string | null;
   auth: AuthState;
   dialog: DialogState;
   toasts: Toast[];
+  /** E2EE 口令（仅内存，不落盘；服务端零知识） */
+  syncPassphrase: string | null;
 
   init(): Promise<void>;
   loadSettings(): Promise<void>;
@@ -66,6 +84,10 @@ interface TermStore {
   closeTab(tabId: string): void;
   setActiveTab(tabId: string): void;
   cycleTab(delta: number): void;
+  setActivePane(paneId: string): void;
+  splitPane(paneId: string, dir: "row" | "col", profileId?: string | null): Promise<void>;
+  closePane(paneId: string): void;
+  setSplitSizes(splitId: string, sizes: number[]): void;
   markSessionExit(sessionId: string, code: number | null): void;
   setDialog(dialog: DialogState): void;
   showToast(msg: string, kind?: Toast["kind"]): void;
@@ -73,22 +95,57 @@ interface TermStore {
   authLogin(email: string, password: string, register: boolean): Promise<boolean>;
   authLogout(): void;
   syncNow(silent?: boolean): Promise<boolean>;
+  enableE2ee(passphrase: string): void;
+  disableE2ee(): void;
+
+  // SFTP 图形化文件管理（R-01）
+  sftpOpen: boolean;
+  sftpProfileId: string | null;
+  sftpRemoteCwd: string;
+  sftpRemoteEntries: SftpEntry[];
+  sftpRemoteLoading: boolean;
+  sftpRemoteError: string | null;
+  sftpLocalCwd: string;
+  sftpLocalEntries: LocalEntry[];
+  sftpLocalLoading: boolean;
+  sftpLocalError: string | null;
+  sftpTransfers: TransferItem[];
+
+  toggleSftp(): void;
+  setSftpProfile(id: string): void;
+  sftpListRemote(path: string): Promise<void>;
+  sftpListLocal(path: string): Promise<void>;
+  sftpMkdirRemote(name: string): Promise<void>;
+  sftpDeleteRemote(entry: SftpEntry): Promise<void>;
+  sftpRenameRemote(from: string, to: string): Promise<void>;
+  sftpDownload(remote: string): Promise<void>;
+  sftpUpload(localFile: string): Promise<void>;
+  sftpLocalMkdir(name: string): Promise<void>;
 }
 
 function welcomeTab(): Tab {
   return {
     id: "welcome",
-    kind: "welcome",
-    sessionId: null,
-    sessionTitle: null,
-    profileId: null,
-    title: "欢迎",
-    exitInfo: null,
+    layout: leafNode(newPane({ kind: "welcome", title: "欢迎" })),
   };
 }
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** 拼接远端路径（远端始终用正向斜杠；空 cwd 视为家目录）。 */
+function joinRemotePath(cwd: string, name: string): string {
+  if (!cwd) return name;
+  if (cwd.endsWith("/")) return cwd + name;
+  return `${cwd}/${name}`;
+}
+
+/** 拼接本地路径（保留操作系统分隔符）。 */
+function joinLocalPath(cwd: string, name: string): string {
+  if (!cwd) return name;
+  const sep = cwd.includes("\\") ? "\\" : "/";
+  return cwd.endsWith("/") || cwd.endsWith("\\") ? cwd + name : cwd + sep + name;
 }
 
 function clampInt(raw: string, min: number, max: number, fallback: number): number {
@@ -156,9 +213,23 @@ export const useStore = create<TermStore>()((set, get) => ({
   groups: [],
   tabs: [welcomeTab()],
   activeTabId: "welcome",
+  activePaneId: null,
   auth: { token: null, user: null, syncing: false, lastSyncAt: null, error: null },
   dialog: null,
   toasts: [],
+  syncPassphrase: null,
+
+  sftpOpen: false,
+  sftpProfileId: null,
+  sftpRemoteCwd: "",
+  sftpRemoteEntries: [],
+  sftpRemoteLoading: false,
+  sftpRemoteError: null,
+  sftpLocalCwd: "",
+  sftpLocalEntries: [],
+  sftpLocalLoading: false,
+  sftpLocalError: null,
+  sftpTransfers: [],
 
   init: async () => {
     if (get().bootstrapped) return;
@@ -224,6 +295,12 @@ export const useStore = create<TermStore>()((set, get) => ({
           break;
         case "confirmClose":
           next.confirmClose = row.value !== "0";
+          break;
+        case "logSessions":
+          next.logSessions = row.value !== "0";
+          break;
+        case "e2eeEnabled":
+          next.e2eeEnabled = row.value !== "0";
           break;
       }
     }
@@ -307,18 +384,21 @@ export const useStore = create<TermStore>()((set, get) => ({
     }
     try {
       const info = await ipc.sessionOpen(buildSessionRequest(profile));
-      const tab: Tab = {
-        id: crypto.randomUUID(),
+      const pane = newPane({
         kind: info.kind,
         sessionId: info.id,
         sessionTitle: info.title,
         profileId: profile?.id ?? null,
         title: profile?.name ?? info.title,
-        exitInfo: null,
+      });
+      const tab: Tab = {
+        id: crypto.randomUUID(),
+        layout: leafNode(pane),
       };
       set((s) => ({
         tabs: [...s.tabs.filter((t) => t.id !== "welcome"), tab],
         activeTabId: tab.id,
+        activePaneId: pane.id,
       }));
     } catch (e) {
       get().showToast(`无法打开会话: ${errMsg(e)}`, "error");
@@ -329,7 +409,9 @@ export const useStore = create<TermStore>()((set, get) => ({
     const st = get();
     const tab = st.tabs.find((t) => t.id === tabId);
     if (!tab) return;
-    if (tab.sessionId) void ipc.sessionClose(tab.sessionId).catch(() => {});
+    for (const p of allLeaves(tab.layout)) {
+      if (p.sessionId) void ipc.sessionClose(p.sessionId).catch(() => {});
+    }
     let tabs = st.tabs.filter((t) => t.id !== tabId);
     let activeTabId = st.activeTabId;
     if (st.activeTabId === tabId) {
@@ -341,7 +423,7 @@ export const useStore = create<TermStore>()((set, get) => ({
       tabs = [welcomeTab()];
       activeTabId = "welcome";
     }
-    set({ tabs, activeTabId });
+    set({ tabs, activeTabId, activePaneId: null });
   },
 
   setActiveTab: (tabId) => set({ activeTabId: tabId }),
@@ -354,12 +436,71 @@ export const useStore = create<TermStore>()((set, get) => ({
     set({ activeTabId: next.id });
   },
 
-  markSessionExit: (sessionId, code) => {
-    const tab = get().tabs.find((t) => t.sessionId === sessionId);
+  setActivePane: (paneId) => set({ activePaneId: paneId }),
+
+  splitPane: async (paneId, dir, profileId) => {
+    const st = get();
+    const tab = st.tabs.find((t) => findPane(t.layout, paneId));
     if (!tab) return;
+    let newPaneObj: Pane;
+    if (profileId) {
+      const profile = st.profiles.find((p) => p.id === profileId);
+      if (!profile) {
+        get().showToast("档案不存在", "error");
+        return;
+      }
+      try {
+        const info = await ipc.sessionOpen(buildSessionRequest(profile));
+        newPaneObj = newPane({
+          kind: info.kind,
+          sessionId: info.id,
+          sessionTitle: info.title,
+          profileId: profile.id,
+          title: profile.name,
+        });
+      } catch (e) {
+        get().showToast(`无法打开会话: ${errMsg(e)}`, "error");
+        return;
+      }
+    } else {
+      newPaneObj = newPane({ title: "空面板" });
+    }
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tab.id ? { ...t, layout: splitLeaf(t.layout, paneId, dir, newPaneObj) } : t,
+      ),
+      activePaneId: newPaneObj.id,
+    }));
+  },
+
+  closePane: (paneId) => {
+    const st = get();
+    const tab = st.tabs.find((t) => findPane(t.layout, paneId));
+    if (!tab) return;
+    const pane = findPane(tab.layout, paneId);
+    if (pane?.sessionId) void ipc.sessionClose(pane.sessionId).catch(() => {});
+    const remaining = removeLeaf(tab.layout, paneId);
+    if (!remaining) {
+      get().closeTab(tab.id);
+      return;
+    }
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, layout: remaining } : t)) }));
+  },
+
+  setSplitSizes: (splitId, sizes) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => ({ ...t, layout: setSplitSizes(t.layout, splitId, sizes) })),
+    }));
+  },
+
+  markSessionExit: (sessionId, code) => {
     const info = code === null ? "会话已结束" : `进程已退出（代码 ${code}）`;
     set((s) => ({
-      tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, exitInfo: info } : t)),
+      tabs: s.tabs.map((t) => {
+        const leaves = allLeaves(t.layout);
+        if (!leaves.some((p) => p.sessionId === sessionId)) return t;
+        return { ...t, layout: updatePaneBySession(t.layout, sessionId, { exitInfo: info }) };
+      }),
     }));
   },
 
@@ -399,6 +540,175 @@ export const useStore = create<TermStore>()((set, get) => ({
     get().showToast("已退出登录，切换到本地模式", "info");
   },
 
+  enableE2ee: (passphrase) => {
+    set({ syncPassphrase: passphrase });
+    void get().saveSetting("e2eeEnabled", true);
+    void get().syncNow(true);
+  },
+
+  disableE2ee: () => {
+    set({ syncPassphrase: null });
+    void get().saveSetting("e2eeEnabled", false);
+  },
+
+  toggleSftp: () => {
+    const st = get();
+    const opening = !st.sftpOpen;
+    set({ sftpOpen: opening });
+    if (opening) {
+      let id = st.sftpProfileId;
+      if (!id || !st.profiles.some((p) => p.id === id)) {
+        id = st.profiles.find((p) => p.kind === "ssh")?.id ?? null;
+      }
+      set({ sftpProfileId: id });
+      if (id) void get().sftpListRemote("");
+    }
+  },
+
+  setSftpProfile: (id) => {
+    set({ sftpProfileId: id });
+    void get().sftpListRemote("");
+  },
+
+  sftpListRemote: async (path) => {
+    const st = get();
+    const profile = st.profiles.find((p) => p.id === st.sftpProfileId);
+    const req = buildSftpRequest(profile);
+    if (!req) {
+      set({
+        sftpRemoteError: "请选择一个 SSH 档案（SFTP 需密钥 / agent 认证，不支持密码）",
+        sftpRemoteEntries: [],
+      });
+      return;
+    }
+    set({ sftpRemoteLoading: true, sftpRemoteError: null });
+    try {
+      const entries = await ipc.sftpList(req, path);
+      set({ sftpRemoteEntries: entries, sftpRemoteCwd: path, sftpRemoteLoading: false });
+    } catch (e) {
+      set({ sftpRemoteError: errMsg(e), sftpRemoteLoading: false, sftpRemoteEntries: [] });
+    }
+  },
+
+  sftpListLocal: async (path) => {
+    set({ sftpLocalLoading: true, sftpLocalError: null });
+    try {
+      const entries = await ipc.localList(path);
+      set({ sftpLocalEntries: entries, sftpLocalCwd: path, sftpLocalLoading: false });
+    } catch (e) {
+      set({ sftpLocalError: errMsg(e), sftpLocalLoading: false, sftpLocalEntries: [] });
+    }
+  },
+
+  sftpMkdirRemote: async (name) => {
+    const st = get();
+    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
+    if (!req) return;
+    const path = joinRemotePath(st.sftpRemoteCwd, name);
+    try {
+      await ipc.sftpMkdir(req, path);
+      get().showToast("目录已创建", "success");
+      await get().sftpListRemote(st.sftpRemoteCwd);
+    } catch (e) {
+      get().showToast(`创建目录失败: ${errMsg(e)}`, "error");
+    }
+  },
+
+  sftpDeleteRemote: async (entry) => {
+    const st = get();
+    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
+    if (!req) return;
+    const path = joinRemotePath(st.sftpRemoteCwd, entry.name);
+    try {
+      await ipc.sftpRemove(req, path, entry.isDir);
+      get().showToast(`已删除 ${entry.name}`, "success");
+      await get().sftpListRemote(st.sftpRemoteCwd);
+    } catch (e) {
+      get().showToast(`删除失败: ${errMsg(e)}（目录仅可为空）`, "error");
+    }
+  },
+
+  sftpRenameRemote: async (from, to) => {
+    const st = get();
+    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
+    if (!req) return;
+    try {
+      await ipc.sftpRename(req, joinRemotePath(st.sftpRemoteCwd, from), joinRemotePath(st.sftpRemoteCwd, to));
+      get().showToast("重命名成功", "success");
+      await get().sftpListRemote(st.sftpRemoteCwd);
+    } catch (e) {
+      get().showToast(`重命名失败: ${errMsg(e)}`, "error");
+    }
+  },
+
+  sftpDownload: async (remote) => {
+    const st = get();
+    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
+    if (!req) return;
+    if (!st.sftpLocalCwd) {
+      get().showToast("请先选择本地目录作为下载目标", "error");
+      return;
+    }
+    const remotePath = joinRemotePath(st.sftpRemoteCwd, remote);
+    const localPath = joinLocalPath(st.sftpLocalCwd, remote);
+    const item: TransferItem = { id: crypto.randomUUID(), kind: "download", name: remote, status: "running" };
+    set((s) => ({ sftpTransfers: [item, ...s.sftpTransfers] }));
+    try {
+      await ipc.sftpDownload(req, remotePath, localPath);
+      set((s) => ({
+        sftpTransfers: s.sftpTransfers.map((t) => (t.id === item.id ? { ...t, status: "done" } : t)),
+      }));
+      get().showToast(`已下载到 ${localPath}`, "success");
+      await get().sftpListLocal(st.sftpLocalCwd);
+    } catch (e) {
+      set((s) => ({
+        sftpTransfers: s.sftpTransfers.map((t) =>
+          t.id === item.id ? { ...t, status: "error", error: errMsg(e) } : t,
+        ),
+      }));
+    }
+  },
+
+  sftpUpload: async (localFile) => {
+    const st = get();
+    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
+    if (!req) return;
+    if (!st.sftpLocalCwd) {
+      get().showToast("请先选择本地目录作为上传源", "error");
+      return;
+    }
+    const localPath = joinLocalPath(st.sftpLocalCwd, localFile);
+    const remotePath = joinRemotePath(st.sftpRemoteCwd, localFile);
+    const item: TransferItem = { id: crypto.randomUUID(), kind: "upload", name: localFile, status: "running" };
+    set((s) => ({ sftpTransfers: [item, ...s.sftpTransfers] }));
+    try {
+      await ipc.sftpUpload(req, localPath, remotePath);
+      set((s) => ({
+        sftpTransfers: s.sftpTransfers.map((t) => (t.id === item.id ? { ...t, status: "done" } : t)),
+      }));
+      get().showToast(`已上传到 ${remotePath}`, "success");
+      await get().sftpListRemote(st.sftpRemoteCwd);
+    } catch (e) {
+      set((s) => ({
+        sftpTransfers: s.sftpTransfers.map((t) =>
+          t.id === item.id ? { ...t, status: "error", error: errMsg(e) } : t,
+        ),
+      }));
+    }
+  },
+
+  sftpLocalMkdir: async (name) => {
+    const st = get();
+    if (!st.sftpLocalCwd) return;
+    const path = joinLocalPath(st.sftpLocalCwd, name);
+    try {
+      await ipc.localMkdir(path);
+      await get().sftpListLocal(st.sftpLocalCwd);
+    } catch (e) {
+      get().showToast(`创建本地目录失败: ${errMsg(e)}`, "error");
+    }
+  },
+
   syncNow: async (silent = false) => {
     const st = get();
     if (!st.auth.token || st.auth.syncing) return false;
@@ -409,9 +719,15 @@ export const useStore = create<TermStore>()((set, get) => ({
 
       const dirty = await ipc.syncExportDirty();
       if (dirty.length > 0) {
+        let toPush = dirty;
+        if (get().settings.e2eeEnabled && get().syncPassphrase) {
+          toPush = await Promise.all(
+            dirty.map(async (it) => ({ ...it, data: await encryptData(it.data, get().syncPassphrase!) })),
+          );
+        }
         await apiFetch(base, token, "/api/sync/push", {
           method: "POST",
-          body: JSON.stringify({ items: dirty }),
+          body: JSON.stringify({ items: toPush }),
         });
         await ipc.syncMarkPushed(dirty);
       }
@@ -423,7 +739,22 @@ export const useStore = create<TermStore>()((set, get) => ({
         `/api/sync/pull?since=${encodeURIComponent(String(since))}`,
       );
       if (data.items.length > 0) {
-        await ipc.syncApplyPull(data.items);
+        let toApply = data.items;
+        if (get().settings.e2eeEnabled && get().syncPassphrase) {
+          try {
+            toApply = await Promise.all(
+              data.items.map(async (it) =>
+                isEncrypted(it.data)
+                  ? { ...it, data: await decryptData(it.data, get().syncPassphrase!) }
+                  : it,
+              ),
+            );
+          } catch {
+            get().showToast("同步解密失败：口令可能不正确", "error");
+            return false;
+          }
+        }
+        await ipc.syncApplyPull(toApply);
         await get().loadProfiles();
         await get().loadSettings();
       }

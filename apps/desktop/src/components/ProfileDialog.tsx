@@ -318,6 +318,46 @@ export function ProfileDialog({ profileId }: Props) {
                 </div>
               </>
             )}
+
+            <span className="form-span section-title">跳板与端口转发</span>
+
+            <label>Jump Host</label>
+            <input
+              value={(config.proxyJump as string) ?? ""}
+              onChange={(e) => patch({ proxyJump: e.target.value })}
+              placeholder="user@bastion:22 或 bastion"
+              spellCheck={false}
+            />
+
+            <label>本地转发 -L</label>
+            <input
+              value={(config.localForward as string) ?? ""}
+              onChange={(e) => patch({ localForward: e.target.value })}
+              placeholder="8080:localhost:80"
+              spellCheck={false}
+            />
+
+            <label>远程转发 -R</label>
+            <input
+              value={(config.remoteForward as string) ?? ""}
+              onChange={(e) => patch({ remoteForward: e.target.value })}
+              placeholder="8080:localhost:80"
+              spellCheck={false}
+            />
+
+            <label>动态(SOCKS) -D</label>
+            <input
+              type="number"
+              min={0}
+              max={65535}
+              value={(config.dynamicForward as number) ?? ""}
+              onChange={(e) =>
+                patch({
+                  dynamicForward: e.target.value ? Number(e.target.value) : undefined,
+                })
+              }
+              placeholder="1080"
+            />
             <span className="form-span" />
             <p className="form-hint">
               基于 OpenSSH：known_hosts、ssh-agent 与密钥体系与系统保持一致；首次连接会像 ssh
