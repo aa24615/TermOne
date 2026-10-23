@@ -1,29 +1,6 @@
-/* 主题变量：默认 Midnight，其余按 data-theme 覆盖 */
+/* 主题变量：默认 Daylight（浅色），其余按 data-theme 覆盖 */
 
 :root {
-  --bg: #0b0d10;
-  --bg-panel: #101318;
-  --bg-elev: #161a21;
-  --bg-input: #0d1015;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --fg: #e2e6ee;
-  --fg-dim: #9aa3b2;
-  --fg-faint: #5b6270;
-  --border: rgba(255, 255, 255, 0.075);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --accent: #7c6aff;
-  --accent-soft: rgba(124, 106, 255, 0.16);
-  --accent-hover: #8d7eff;
-  --on-accent: #ffffff;
-  --danger: #ff5d6c;
-  --danger-soft: rgba(255, 93, 108, 0.14);
-  --ok: #3ecf8e;
-  --warn: #e5a662;
-  --term-bg: #0f1216;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-
-:root[data-theme="daylight"] {
   --bg: #e9ecf1;
   --bg-panel: #f6f7f9;
   --bg-elev: #ffffff;
@@ -44,6 +21,31 @@
   --warn: #9a6700;
   --term-bg: #f7f8fa;
   --shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  color-scheme: light;
+}
+
+:root[data-theme="midnight"] {
+  --bg: #0b0d10;
+  --bg-panel: #101318;
+  --bg-elev: #161a21;
+  --bg-input: #0d1015;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --fg: #e2e6ee;
+  --fg-dim: #9aa3b2;
+  --fg-faint: #5b6270;
+  --border: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --accent: #7c6aff;
+  --accent-soft: rgba(124, 106, 255, 0.16);
+  --accent-hover: #8d7eff;
+  --on-accent: #ffffff;
+  --danger: #ff5d6c;
+  --danger-soft: rgba(255, 93, 108, 0.14);
+  --ok: #3ecf8e;
+  --warn: #e5a662;
+  --term-bg: #0f1216;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
 }
 
 :root[data-theme="dracula"] {
@@ -67,6 +69,7 @@
   --warn: #f1fa8c;
   --term-bg: #282a36;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
 }
 
 :root[data-theme="nord"] {
@@ -90,6 +93,7 @@
   --warn: #ebcb8b;
   --term-bg: #2e3440;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
 }
 
 :root[data-theme="solarized"] {
@@ -113,4 +117,5 @@
   --warn: #b58900;
   --term-bg: #002b36;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
 }

@@ -24,6 +24,7 @@ function KindIcon({ kind }: { kind: ProfileRow["kind"] }) {
 
 export function Sidebar() {
   const profiles = useStore((s) => s.profiles);
+  const groups = useStore((s) => s.groups);
   const openTerminal = useStore((s) => s.openTerminal);
   const deleteProfile = useStore((s) => s.deleteProfile);
   const setDialog = useStore((s) => s.setDialog);
@@ -32,13 +33,25 @@ export function Sidebar() {
   const q = query.trim().toLowerCase();
   const filtered = q ? profiles.filter((p) => p.name.toLowerCase().includes(q)) : profiles;
 
+  // 按分组（文件夹）归类；分组按 sortOrder 排序，未分组档案放在最后。
+  const groupOrder = [...groups].sort((a, b) => a.sortOrder - b.sortOrder);
+  const groupName = new Map(groupOrder.map((g) => [g.id, g.name]));
+  const byGroup = new Map<string | null, typeof filtered>();
+  for (const p of filtered) {
+    const key = p.groupId && groupName.has(p.groupId) ? p.groupId : null;
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key)!.push(p);
+  }
+  const orderedKeys: (string | null)[] = [...groupOrder.map((g) => g.id), null];
+  const renderKeys = orderedKeys.filter((k) => byGroup.has(k));
+
   return (
     <aside className="sidebar">
       <div className="sidebar-search">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索档案…"
+          placeholder="搜索终端…"
           spellCheck={false}
         />
       </div>
@@ -46,7 +59,7 @@ export function Sidebar() {
       <div className="sidebar-scroll">
         <div className="side-section">
           <div className="side-header">
-            <span>连接档案</span>
+            <span>终端列表</span>
             <button
               className="icon-btn"
               title="新建档案"
@@ -56,50 +69,69 @@ export function Sidebar() {
             </button>
           </div>
 
-          {filtered.length === 0 && <div className="side-empty">暂无档案，点击 + 新建</div>}
+          {filtered.length === 0 && <div className="side-empty">暂无终端，点击 + 新建</div>}
 
-          {filtered.map((p) => {
-            const color = (p.config as { color?: string }).color;
+          {renderKeys.map((key) => {
+            const list = byGroup.get(key)!;
             return (
-            <div
-              key={p.id}
-              className="profile-item"
-              onClick={() => void openTerminal(p.id)}
-              title="点击打开会话"
-            >
-              <span
-                className={`kind-badge kind-${p.kind}`}
-                style={color ? { background: color, color: "#fff" } : undefined}
-              >
-                <KindIcon kind={p.kind} />
-              </span>
-              <div className="profile-meta">
-                <div className="profile-name">{p.name}</div>
-                <div className="profile-sub">{profileSubtitle(p)}</div>
+              <div className="profile-group" key={key ?? "__ungrouped__"}>
+                {key && (
+                  <div className="group-header">
+                    <span>{groupName.get(key)}</span>
+                    <span className="group-count">{list.length}</span>
+                  </div>
+                )}
+                {!key && list.length > 0 && (
+                  <div className="group-header">
+                    <span>未分组</span>
+                    <span className="group-count">{list.length}</span>
+                  </div>
+                )}
+                {list.map((p) => {
+                  const color = (p.config as { color?: string }).color;
+                  return (
+                    <div
+                      key={p.id}
+                      className="profile-item"
+                      onClick={() => void openTerminal(p.id)}
+                      title="点击打开会话"
+                    >
+                      <span
+                        className={`kind-badge kind-${p.kind}`}
+                        style={color ? { background: color, color: "#fff" } : undefined}
+                      >
+                        <KindIcon kind={p.kind} />
+                      </span>
+                      <div className="profile-meta">
+                        <div className="profile-name">{p.name}</div>
+                        <div className="profile-sub">{profileSubtitle(p)}</div>
+                      </div>
+                      <div className="profile-actions">
+                        <button
+                          className="icon-btn"
+                          title="编辑"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDialog({ type: "profile", profileId: p.id });
+                          }}
+                        >
+                          <IconEdit size={13} />
+                        </button>
+                        <button
+                          className="icon-btn danger"
+                          title="删除"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteProfile(p.id);
+                          }}
+                        >
+                          <IconTrash size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="profile-actions">
-                <button
-                  className="icon-btn"
-                  title="编辑"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDialog({ type: "profile", profileId: p.id });
-                  }}
-                >
-                  <IconEdit size={13} />
-                </button>
-                <button
-                  className="icon-btn danger"
-                  title="删除"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void deleteProfile(p.id);
-                  }}
-                >
-                  <IconTrash size={13} />
-                </button>
-              </div>
-            </div>
             );
           })}
         </div>

@@ -137,7 +137,7 @@ const PALETTES: Record<string, TermPalette> = {
 };
 
 export function getTermTheme(id: string): ITheme {
-  const p = PALETTES[id] ?? PALETTES.midnight;
+  const p = PALETTES[id] ?? PALETTES.daylight;
   return {
     foreground: p.fg,
     background: p.bg,

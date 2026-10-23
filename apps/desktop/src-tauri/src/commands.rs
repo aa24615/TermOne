@@ -7,8 +7,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use term_core::{
-    list_ports, list_shells, secrets, BackupStats, ProfileRow, SessionInfo, SessionRequest,
-    SettingRow, SyncItem,
+    list_ports, list_shells, secrets, BackupStats, GroupRow, ProfileRow, SessionInfo,
+    SessionRequest, SettingRow, SyncItem,
 };
 
 use crate::state::AppState;
@@ -172,6 +172,16 @@ pub async fn profile_delete(state: State<'_, AppState>, id: String) -> CmdResult
         .lock()
         .unwrap()
         .profile_delete(&id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn groups_list(state: State<'_, AppState>) -> CmdResult<Vec<GroupRow>> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .group_list()
         .map_err(|e| e.to_string())
 }
 

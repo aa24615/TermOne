@@ -26,10 +26,26 @@ export function defaultConfig(kind: ProfileKind): ProfileConfig {
   }
 }
 
+export function localDefaultName(config: LocalProfileConfig): string {
+  const shell = (config.shell as string) || "";
+  const p = shell.toLowerCase();
+  if (p.endsWith("cmd.exe") || p === "cmd") return "cmd";
+  if (p.includes("git") && p.includes("bash")) return "Git Bash";
+  if (p.includes("pwsh")) return "PowerShell 7";
+  if (p.includes("powershell")) return "PowerShell";
+  if (p.includes("nu.exe") || p.endsWith("nu")) return "Nushell";
+  if (p.includes("wsl")) return "WSL";
+  if (shell) {
+    const stem = shell.split(/[\\/]/).pop() || shell;
+    return stem.replace(/\.exe$/i, "");
+  }
+  return "本地 Shell";
+}
+
 export function defaultProfileName(kind: ProfileKind, config: ProfileConfig): string {
   switch (kind) {
     case "local":
-      return "本地 Shell";
+      return localDefaultName(config as LocalProfileConfig);
     case "ssh": {
       const c = config as SshProfileConfig;
       return c.host ? `SSH ${c.host}` : "SSH 连接";

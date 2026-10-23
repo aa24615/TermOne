@@ -41,11 +41,20 @@ export interface ProfileRow {
   kind: ProfileKind;
   name: string;
   config: ProfileConfig;
+  groupId?: string | null;
   sortOrder: number;
   updatedAt: number;
   createdAt: number;
   deleted: boolean;
   dirty: boolean;
+}
+
+export interface GroupRow {
+  id: string;
+  name: string;
+  parentId: string | null;
+  sortOrder: number;
+  collapsed: boolean;
 }
 
 export interface SettingRow {
@@ -136,7 +145,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  theme: "midnight",
+  theme: "daylight",
   fontFamily:
     '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace',
   fontSize: 14,

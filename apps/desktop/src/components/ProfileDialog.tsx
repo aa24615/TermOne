@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { ipc } from "../ipc";
-import { defaultConfig, defaultProfileName } from "../profile";
+import { defaultConfig, defaultProfileName, localDefaultName } from "../profile";
 import { useStore } from "../store";
 import type { ProfileKind, ProfileRow, SerialPortDto, ShellInfoDto } from "../types";
 import { Dropdown } from "./Dropdown";
@@ -35,6 +35,7 @@ export function ProfileDialog({ profileId }: Props) {
 
   const [kind, setKind] = useState<ProfileKind>(existing?.kind ?? "local");
   const [name, setName] = useState(existing?.name ?? "");
+  const [nameTouched, setNameTouched] = useState(Boolean(existing?.name));
   const [config, setConfig] = useState<Record<string, unknown>>(
     existing ? { ...(existing.config as Record<string, unknown>) } : { ...defaultConfig("local") },
   );
@@ -104,6 +105,10 @@ export function ProfileDialog({ profileId }: Props) {
       base.preset = undefined;
     }
     patch(base);
+    // 用户未手动命名时，跟随所选 Shell 自动给出默认名（如 cmd → "cmd"）
+    if (!nameTouched) {
+      setName(localDefaultName(base as never));
+    }
   };
 
   const pickIdentityFile = async (): Promise<void> => {    try {
@@ -136,6 +141,7 @@ export function ProfileDialog({ profileId }: Props) {
       kind,
       name: name.trim() || defaultProfileName(kind, config as never),
       config: config as never,
+      groupId: existing?.groupId ?? null,
       sortOrder: existing?.sortOrder ?? 0,
       updatedAt: Date.now(),
       createdAt: existing?.createdAt ?? Date.now(),
@@ -171,7 +177,10 @@ export function ProfileDialog({ profileId }: Props) {
         <label>名称</label>
         <input
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            setNameTouched(true);
+          }}
           placeholder={defaultProfileName(kind, config as never)}
           spellCheck={false}
         />

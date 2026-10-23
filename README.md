@@ -13,6 +13,14 @@
 - **安全设计**：SSH 密码、密钥口令等机密保存在 OS 密钥环（Windows Credential Manager / macOS Keychain），**永不上传**
 - **主题**：Midnight / Daylight / Dracula / Nord / Solarized Dark
 
+## 界面预览
+
+| 欢迎 | 本地终端 |
+| --- | --- |
+| ![欢迎页](docs/screenshots/welcome.png) | ![本地终端](docs/screenshots/terminal-local.png) |
+| **新建档案** | **设置** |
+| ![新建档案](docs/screenshots/profile-new.png) | ![设置](docs/screenshots/settings.png) |
+
 ## 技术栈
 
 | 层 | 技术 |

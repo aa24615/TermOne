@@ -10,3 +10,8 @@ target/
 data/
 data-test/
 .Trash-*/
+
+# local project cache / generated artifacts
+.workbuddy/
+apps/desktop/src-tauri/gen/
+__pycache__/

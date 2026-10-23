@@ -5,11 +5,19 @@ mod state;
 
 use std::sync::Mutex;
 
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+
 use term_core::{Db, SessionManager};
 
 fn main() {
     let db = match Db::open() {
-        Ok(db) => Mutex::new(db),
+        Ok(db) => {
+            // 初次启动默认注入系统自带 Shell 档案（CMD / Git Bash / PowerShell 等），
+            // 失败也不影响主流程。
+            let _ = db.seed_system_profiles();
+            Mutex::new(db)
+        }
         Err(e) => {
             eprintln!("无法打开本地数据库: {e}");
             std::process::exit(1);
@@ -35,6 +43,7 @@ fn main() {
             commands::profile_list,
             commands::profile_save,
             commands::profile_delete,
+            commands::groups_list,
             commands::settings_all,
             commands::setting_set,
             commands::secret_set,

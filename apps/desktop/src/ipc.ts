@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AppInfoDto,
+  GroupRow,
   ProfileRow,
   SerialPortDto,
   SessionInfo,
@@ -45,6 +46,7 @@ export const ipc = {
   profileList: () => invoke<ProfileRow[]>("profile_list"),
   profileSave: (profile: ProfileRow) => invoke<ProfileRow>("profile_save", { profile }),
   profileDelete: (id: string) => invoke<void>("profile_delete", { id }),
+  groupsList: () => invoke<GroupRow[]>("groups_list"),
 
   settingsAll: () => invoke<SettingRow[]>("settings_all"),
   settingSet: (key: string, value: string) => invoke<void>("setting_set", { key, value }),

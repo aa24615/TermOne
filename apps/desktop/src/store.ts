@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   type AppInfoDto,
   type AppSettings,
+  type GroupRow,
   type ProfileRow,
   type SettingRow,
   type SyncItem,
@@ -46,6 +47,7 @@ interface TermStore {
   appInfo: AppInfoDto | null;
   settings: AppSettings;
   profiles: ProfileRow[];
+  groups: GroupRow[];
   tabs: Tab[];
   activeTabId: string | null;
   auth: AuthState;
@@ -56,6 +58,7 @@ interface TermStore {
   loadSettings(): Promise<void>;
   saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
   loadProfiles(): Promise<void>;
+  loadGroups(): Promise<void>;
   reloadAfterImport(): Promise<void>;
   saveProfile(profile: ProfileRow): Promise<boolean>;
   deleteProfile(id: string): Promise<void>;
@@ -150,6 +153,7 @@ export const useStore = create<TermStore>()((set, get) => ({
   appInfo: null,
   settings: { ...DEFAULT_SETTINGS },
   profiles: [],
+  groups: [],
   tabs: [welcomeTab()],
   activeTabId: "welcome",
   auth: { token: null, user: null, syncing: false, lastSyncAt: null, error: null },
@@ -160,6 +164,7 @@ export const useStore = create<TermStore>()((set, get) => ({
     if (get().bootstrapped) return;
     await get().loadSettings();
     await get().loadProfiles();
+    void get().loadGroups();
     void ipc
       .appInfo()
       .then((info) => set({ appInfo: info }))
@@ -250,8 +255,18 @@ export const useStore = create<TermStore>()((set, get) => ({
     }
   },
 
+  loadGroups: async () => {
+    try {
+      const groups = await ipc.groupsList();
+      set({ groups });
+    } catch {
+      // 忽略分组读取失败
+    }
+  },
+
   reloadAfterImport: async () => {
     await get().loadProfiles();
+    await get().loadGroups();
     await get().loadSettings();
   },
 
