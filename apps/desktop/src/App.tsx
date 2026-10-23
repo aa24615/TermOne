@@ -13,6 +13,7 @@ import { TerminalView } from "./components/TerminalView";
 import { Toasts } from "./components/Toasts";
 import { TitleBar } from "./components/TitleBar";
 import { WelcomePane } from "./components/WelcomePane";
+import { isTauri } from "./env";
 import { useStore } from "./store";
 
 export default function App() {
@@ -78,6 +79,7 @@ export default function App() {
   // 只订阅一次关闭请求，避免频繁重订阅导致监听器泄漏（泄漏的旧监听器会
   // 用过期状态重复 preventDefault，使退出流程卡死）
   useEffect(() => {
+    if (!isTauri()) return; // 浏览器预览环境没有窗口 API
     let cancelled = false;
     let un: (() => void) | undefined;
     void getCurrentWindow()

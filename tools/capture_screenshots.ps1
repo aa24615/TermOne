@@ -13,6 +13,15 @@ param(
     [switch]$Walk
 )
 
+# Strip any inherited HTTP(S) proxy before spawning the app: TermOne serves its
+# frontend on http://tauri.localhost, and an inherited proxy would route that
+# request to the proxy and leave WebView2 blank (no UIA elements -> nothing to
+# click). The spawned child inherits this now proxy-free environment.
+Remove-Item -Path Env:HTTP_PROXY  -ErrorAction SilentlyContinue
+Remove-Item -Path Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+$env:no_proxy = "tauri.localhost,localhost,127.0.0.1"
+$env:NO_PROXY  = "tauri.localhost,localhost,127.0.0.1"
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -160,6 +169,8 @@ if ($Walk) {
 }
 
 if ($Probe) {
+    Start-Sleep -Seconds 15
+    Focus-App $p
     $root = $ae::FromHandle($p.MainWindowHandle)
     $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.Condition]::TrueCondition) |

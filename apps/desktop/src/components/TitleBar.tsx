@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useStore } from "../store";
+import { isTauri } from "../env";
 import { IconMinus, IconSquare, IconX } from "./icons";
 
 export function TitleBar() {
@@ -15,6 +16,7 @@ export function TitleBar() {
   }, []);
 
   useEffect(() => {
+    if (!isTauri()) return; // 浏览器预览环境没有窗口 API
     const win = getCurrentWindow();
     let unlisten: (() => void) | undefined;
     void win.isMaximized().then(setIsMaximized).catch(() => {});
@@ -45,21 +47,21 @@ export function TitleBar() {
           <button
             className="win-btn"
             aria-label="最小化"
-            onClick={() => void getCurrentWindow().minimize()}
+            onClick={() => { if (isTauri()) void getCurrentWindow().minimize(); }}
           >
             <IconMinus size={12} />
           </button>
           <button
             className="win-btn"
             aria-label={isMaximized ? "还原" : "最大化"}
-            onClick={() => void getCurrentWindow().toggleMaximize()}
+            onClick={() => { if (isTauri()) void getCurrentWindow().toggleMaximize(); }}
           >
             <IconSquare size={10} />
           </button>
           <button
             className="win-btn close"
             aria-label="关闭"
-            onClick={() => void getCurrentWindow().close()}
+            onClick={() => { if (isTauri()) void getCurrentWindow().close(); }}
           >
             <IconX size={12} />
           </button>
