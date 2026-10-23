@@ -168,6 +168,14 @@ export function SettingsDialog() {
           onChange={(e) => void saveSetting("autoSync", e.target.checked)}
         />
 
+        <span className="form-span">
+          <p className="form-hint">
+            <strong>密钥永不上传</strong>
+            ：密码与私钥只保存在本机系统钥匙串（Windows 凭据管理器 / macOS 钥匙串 / Secret
+            Service），从不进入档案配置，因此同步到云端的只有连接地址等非敏感信息。
+          </p>
+        </span>
+
         <span className="form-span section-title">端到端加密（E2EE）</span>
 
         <label>启用加密</label>

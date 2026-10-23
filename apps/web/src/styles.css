@@ -187,10 +187,39 @@ textarea:focus {
 }
 
 .host-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 凭据存放位置徽标 */
+.badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 500;
+  font-style: normal;
+  line-height: 17px;
+}
+
+.badge.server {
+  background: rgba(110, 168, 254, 0.16);
+  color: var(--accent);
+}
+
+.badge.local {
+  background: rgba(81, 207, 102, 0.14);
+  color: var(--ok);
+}
+
+.badge.none {
+  background: var(--panel-2);
+  color: var(--fg-dim);
 }
 
 .host-sub {
@@ -376,6 +405,73 @@ textarea:focus {
   color: var(--fg-dim);
   font-style: normal;
   font-size: 11px;
+}
+
+.notice.ok {
+  border-color: rgba(81, 207, 102, 0.35);
+  background: rgba(81, 207, 102, 0.08);
+}
+
+/* ---------- 凭据策略勾选项 ---------- */
+.cred-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 2px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.check.muted {
+  opacity: 0.55;
+}
+
+.check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+}
+
+.check em {
+  color: var(--fg-dim);
+  font-style: normal;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.check .warn {
+  color: #ffb3b3;
+  font-weight: 500;
+}
+
+.cred-target {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg-dim);
+  font-family: "Cascadia Mono", "Menlo", "Consolas", monospace;
+  font-size: 12.5px;
 }
 
 .notice {

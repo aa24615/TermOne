@@ -33,6 +33,8 @@ db.exec(`
 
   -- Web SSH 主机与凭据。secret_enc 为 AES-256-GCM 密文（含 IV+tag），
   -- 服务端永不向外返回明文；仅在本进程内解密后用于建立 SSH 连接。
+  -- secret_enc 可空：默认「凭据永不上传」，主机可以只存元数据，
+  -- 连接时由客户端临时提供（仅内存，用完即弃）。
   CREATE TABLE IF NOT EXISTS ssh_hosts (
     id          TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL,
@@ -41,7 +43,7 @@ db.exec(`
     port        INTEGER NOT NULL DEFAULT 22,
     username    TEXT NOT NULL,
     auth_type   TEXT NOT NULL,          -- password | key
-    secret_enc  TEXT NOT NULL,          -- 密码 或 私钥(PEM)
+    secret_enc  TEXT,                   -- 密码 或 私钥(PEM)，NULL = 服务端不持有凭据
     passphrase_enc TEXT,                -- 私钥口令（可空）
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
@@ -61,6 +63,45 @@ db.exec(`
   );
 `);
 
+/**
+ * 迁移：`ssh_hosts.secret_enc` 由 NOT NULL 放宽为可空。
+ *
+ * 背景：凭据策略改为「默认永不上传服务端」，主机允许只保存元数据。
+ * 老库用 `CREATE TABLE IF NOT EXISTS` 不会重建表，故需显式迁移（SQLite 无法直接改列约束）。
+ */
+function migrateSshHostsNullableSecret(): void {
+  const cols = db.prepare("PRAGMA table_info(ssh_hosts)").all() as unknown as {
+    name: string;
+    notnull: number;
+  }[];
+  const col = cols.find((c) => c.name === "secret_enc");
+  if (!col || Number(col.notnull) === 0) return;
+
+  db.exec(`
+    CREATE TABLE ssh_hosts_new (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      host        TEXT NOT NULL,
+      port        INTEGER NOT NULL DEFAULT 22,
+      username    TEXT NOT NULL,
+      auth_type   TEXT NOT NULL,
+      secret_enc  TEXT,
+      passphrase_enc TEXT,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    INSERT INTO ssh_hosts_new
+      (id, user_id, name, host, port, username, auth_type, secret_enc, passphrase_enc, created_at, updated_at)
+      SELECT id, user_id, name, host, port, username, auth_type, secret_enc, passphrase_enc, created_at, updated_at
+      FROM ssh_hosts;
+    DROP TABLE ssh_hosts;
+    ALTER TABLE ssh_hosts_new RENAME TO ssh_hosts;
+    CREATE INDEX IF NOT EXISTS idx_ssh_hosts_user ON ssh_hosts (user_id, updated_at);
+  `);
+}
+migrateSshHostsNullableSecret();
+
 export interface UserItemRow {
   item_id: string;
   kind: string;
@@ -78,7 +119,8 @@ export interface SshHostRow {
   port: number;
   username: string;
   auth_type: string;
-  secret_enc: string;
+  /** NULL = 服务端不持有凭据（默认：凭据永不上传），连接时由客户端临时提供 */
+  secret_enc: string | null;
   passphrase_enc: string | null;
   created_at: number;
   updated_at: number;

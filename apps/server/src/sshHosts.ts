@@ -5,11 +5,13 @@ import { decryptSecret, encryptSecret, newHostId } from "./credCrypto";
 import { db, nowMs, type SshHostRow } from "./db";
 
 /**
- * Web SSH 主机（含凭据）的 CRUD。
+ * Web SSH 主机（**元数据**）的 CRUD。
  *
- * **安全约束**：所有对外响应只返回元数据（id/name/host/port/username/authType/时间戳），
- * 绝不返回 `secret_enc` / `passphrase_enc` / 任何明文。明文只在服务端内存解密，
- * 供 `sshWs.ts` 建立连接时使用。
+ * ## 凭据策略：默认永不上传
+ * - 客户端默认**只提交元数据**，密码/私钥不离开本机浏览器；
+ * - 只有用户显式勾选「保存到服务端」时，才提交明文并在此处 AES-256-GCM 加密落盘；
+ * - 服务端接口**永不返回** `secret_enc` / `passphrase_enc` / 任何明文；
+ * - 服务端无凭据的主机，连接时由客户端经 WebSocket 临时提供（仅内存，用完即弃）。
  */
 
 interface HostMeta {
@@ -19,6 +21,8 @@ interface HostMeta {
   port: number;
   username: string;
   authType: "password" | "key";
+  /** 服务端是否持有（加密的）凭据。false = 连接时需客户端临时提供 */
+  hasCredential: boolean;
   hasPassphrase: boolean;
   createdAt: number;
   updatedAt: number;
@@ -32,6 +36,7 @@ function toMeta(r: SshHostRow): HostMeta {
     port: Number(r.port),
     username: r.username,
     authType: r.auth_type === "key" ? "key" : "password",
+    hasCredential: !!r.secret_enc,
     hasPassphrase: !!r.passphrase_enc,
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
@@ -44,10 +49,12 @@ interface HostInput {
   port?: unknown;
   username?: unknown;
   authType?: unknown;
-  /** 明文：密码 或 私钥 PEM。仅在写入时存在，随即加密落盘。 */
+  /** 明文：密码 或 私钥 PEM。**缺省 = 不上传**（默认策略） */
   password?: unknown;
   privateKey?: unknown;
   passphrase?: unknown;
+  /** true = 删除服务端已保存的凭据（用户取消勾选「保存到服务端」） */
+  clearCredential?: unknown;
 }
 
 interface ParsedHost {
@@ -56,12 +63,13 @@ interface ParsedHost {
   port: number;
   username: string;
   authType: "password" | "key";
-  /** null = 保持原有凭据不变（仅 PATCH 允许） */
+  /** null = 不写入凭据（创建：不上传；更新：保持不变，除非 clearCredential） */
   secret: string | null;
   passphrase: string | null;
+  clearCredential: boolean;
 }
 
-function parseHostInput(body: HostInput, partial: boolean): ParsedHost | string {
+function parseHostInput(body: HostInput): ParsedHost | string {
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const host = typeof body.host === "string" ? body.host.trim() : "";
   const username = typeof body.username === "string" ? body.username.trim() : "";
@@ -77,7 +85,6 @@ function parseHostInput(body: HostInput, partial: boolean): ParsedHost | string 
   if (!host) return "主机地址不能为空";
   if (!username) return "用户名不能为空";
   if (!Number.isInteger(port) || port < 1 || port > 65535) return "端口需在 1–65535 之间";
-  if (partial && !name && !host) return "无可更新字段";
 
   const secret =
     authType === "key"
@@ -87,11 +94,6 @@ function parseHostInput(body: HostInput, partial: boolean): ParsedHost | string 
       : typeof body.password === "string"
         ? body.password
         : "";
-  if (!secret) {
-    // 服务端永不返回凭据明文，因此编辑时允许「留空 = 保持不变」
-    if (partial) return { name: name || `${username}@${host}`, host, port, username, authType, secret: null, passphrase: null };
-    return authType === "key" ? "私钥不能为空" : "密码不能为空";
-  }
 
   const passphrase =
     authType === "key" && typeof body.passphrase === "string" && body.passphrase
@@ -104,8 +106,9 @@ function parseHostInput(body: HostInput, partial: boolean): ParsedHost | string 
     port,
     username,
     authType,
-    secret,
+    secret: secret || null,
     passphrase,
+    clearCredential: body.clearCredential === true,
   };
 }
 
@@ -125,11 +128,8 @@ export function registerSshHostRoutes(app: FastifyInstance): void {
     const userId = requireAuth(req, reply);
     if (!userId) return;
     const body = (req.body ?? {}) as HostInput;
-    const parsed = parseHostInput(body, false);
+    const parsed = parseHostInput(body);
     if (typeof parsed === "string") return reply.code(400).send({ error: parsed });
-    if (parsed.secret === null) {
-      return reply.code(400).send({ error: parsed.authType === "key" ? "私钥不能为空" : "密码不能为空" });
-    }
 
     const id = newHostId();
     const ts = nowMs();
@@ -145,7 +145,8 @@ export function registerSshHostRoutes(app: FastifyInstance): void {
       parsed.port,
       parsed.username,
       parsed.authType,
-      encryptSecret(parsed.secret),
+      // 未上传凭据 → NULL：服务端从此不持有该主机的密钥
+      parsed.secret ? encryptSecret(parsed.secret) : null,
       parsed.passphrase ? encryptSecret(parsed.passphrase) : null,
       ts,
       ts,
@@ -163,14 +164,24 @@ export function registerSshHostRoutes(app: FastifyInstance): void {
     if (!existing) return reply.code(404).send({ error: "主机不存在" });
 
     const body = (req.body ?? {}) as HostInput;
-    const parsed = parseHostInput(body, true);
+    const parsed = parseHostInput(body);
     if (typeof parsed === "string") return reply.code(400).send({ error: parsed });
 
-    // 留空则沿用原有凭据（明文永不离开服务端，前端无法回填）
-    const secretEnc = parsed.secret ? encryptSecret(parsed.secret) : existing.secret_enc;
-    const passphraseEnc = parsed.passphrase
-      ? encryptSecret(parsed.passphrase)
-      : existing.passphrase_enc;
+    // 1) 用户取消勾选「保存到服务端」→ 立刻删除已保存的凭据
+    // 2) 提交了新凭据 → 覆盖
+    // 3) 留空 → 保持不变（服务端永不返回明文，前端无法回填）
+    let secretEnc: string | null;
+    let passphraseEnc: string | null;
+    if (parsed.clearCredential) {
+      secretEnc = null;
+      passphraseEnc = null;
+    } else if (parsed.secret) {
+      secretEnc = encryptSecret(parsed.secret);
+      passphraseEnc = parsed.passphrase ? encryptSecret(parsed.passphrase) : null;
+    } else {
+      secretEnc = existing.secret_enc;
+      passphraseEnc = existing.passphrase_enc;
+    }
 
     db.prepare(
       `UPDATE ssh_hosts SET
@@ -204,15 +215,19 @@ export function registerSshHostRoutes(app: FastifyInstance): void {
   });
 }
 
-/** 供 WebSocket 网关使用：读取并解密某主机的凭据（仅内存，勿落盘/勿传输）。 */
+/**
+ * 供 WebSocket 网关使用：读取并解密某主机的凭据（仅内存，勿落盘/勿传输）。
+ * `secret` 为 null 表示服务端不持有凭据，必须由客户端在 connect 帧中临时提供。
+ */
 export function loadCredential(
   userId: string,
   hostId: string,
-): { row: SshHostRow; secret: string; passphrase: string | null } | null {
+): { row: SshHostRow; secret: string | null; passphrase: string | null } | null {
   const row = db
     .prepare("SELECT * FROM ssh_hosts WHERE id = ? AND user_id = ?")
     .get(hostId, userId) as unknown as SshHostRow | undefined;
   if (!row) return null;
+  if (!row.secret_enc) return { row, secret: null, passphrase: null };
   try {
     return {
       row,

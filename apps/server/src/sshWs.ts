@@ -25,7 +25,10 @@ import { loadCredential } from "./sshHosts";
  *
  * 安全要点：
  *   - 握手必须带有效 JWT（否则 4401 关闭），避免服务器沦为开放 SSH 代理；
- *   - 凭据明文只在本次连接的内存中，连接结束即丢弃；
+ *   - **默认凭据不上传**：服务端没有凭据的主机，必须由客户端在 connect 帧里临时提供，
+ *     该明文只在本次连接的内存中存在，不写库、不落盘，连接结束即丢弃；
+ *   - 只有用户显式勾选「保存到服务端」时，才走 AES-256-GCM 加密落盘；
+ *   - 接口永不返回任何凭据明文。
  *   - 主机公钥指纹 Trust-On-First-Use，变更即拒绝（防中间人）。
  */
 
@@ -91,20 +94,61 @@ function verifyHostKey(
   return { ok: row.key_hash === fingerprint, fingerprint, firstUse: false };
 }
 
+/**
+ * 解析连接目标。
+ *
+ * **凭据优先级**：客户端本次连接内联提供的凭据 > 服务端已加密保存的凭据。
+ * 内联凭据**只存在于本次连接的内存中**，绝不写库——这是「密钥永不上传」的默认路径：
+ * 主机只登记元数据，每次连接时由用户在浏览器里输入，用完即弃。
+ */
 function resolveTarget(
   userId: string,
   frame: ConnectFrame,
 ): { target: Target } | { error: string } {
   const hostId = typeof frame.hostId === "string" ? frame.hostId : "";
+  const authType = frame.authType === "key" ? "key" : "password";
+  const inlineSecret =
+    authType === "key"
+      ? typeof frame.privateKey === "string"
+        ? frame.privateKey
+        : ""
+      : typeof frame.password === "string"
+        ? frame.password
+        : "";
+  const inlinePassphrase =
+    authType === "key" && typeof frame.passphrase === "string" && frame.passphrase
+      ? frame.passphrase
+      : null;
 
   if (hostId) {
     const cred = loadCredential(userId, hostId);
     if (!cred) return { error: "主机不存在或凭据无法解密" };
+
+    const base = {
+      host: cred.row.host,
+      port: Number(cred.row.port),
+      username: cred.row.username,
+    };
+
+    // 客户端本次临时提供：不读库、不落盘
+    if (inlineSecret) {
+      return {
+        target: { ...base, authType, secret: inlineSecret, passphrase: inlinePassphrase },
+      };
+    }
+
+    // 服务端没有保存过凭据（默认策略）→ 必须由客户端提供
+    if (cred.secret === null) {
+      return {
+        error: authType === "key"
+          ? "该主机未保存凭据，请在客户端提供私钥后连接"
+          : "该主机未保存凭据，请在客户端输入密码后连接",
+      };
+    }
+
     return {
       target: {
-        host: cred.row.host,
-        port: Number(cred.row.port),
-        username: cred.row.username,
+        ...base,
         authType: cred.row.auth_type === "key" ? "key" : "password",
         secret: cred.secret,
         passphrase: cred.passphrase,
@@ -116,26 +160,19 @@ function resolveTarget(
   const username = typeof frame.username === "string" ? frame.username.trim() : "";
   if (!host) return { error: "主机地址不能为空" };
   if (!username) return { error: "用户名不能为空" };
-
-  const authType = frame.authType === "key" ? "key" : "password";
-  const secret =
-    authType === "key"
-      ? typeof frame.privateKey === "string"
-        ? frame.privateKey
-        : ""
-      : typeof frame.password === "string"
-        ? frame.password
-        : "";
-  if (!secret) return { error: authType === "key" ? "私钥不能为空" : "密码不能为空" };
-
-  const passphrase =
-    authType === "key" && typeof frame.passphrase === "string" && frame.passphrase
-      ? frame.passphrase
-      : null;
+  if (!inlineSecret) return { error: authType === "key" ? "私钥不能为空" : "密码不能为空" };
 
   const port = num(frame.port, 22, 1, 65535);
-  const target: Target = { host, port, username, authType, secret, passphrase };
+  const target: Target = {
+    host,
+    port,
+    username,
+    authType,
+    secret: inlineSecret,
+    passphrase: inlinePassphrase,
+  };
 
+  // 仅当用户显式勾选「保存到服务端」时才落盘（加密）
   if (frame.save === true) {
     const id = newHostId();
     const ts = nowMs();
@@ -151,8 +188,8 @@ function resolveTarget(
       port,
       username,
       authType,
-      encryptSecret(secret),
-      passphrase ? encryptSecret(passphrase) : null,
+      encryptSecret(inlineSecret),
+      inlinePassphrase ? encryptSecret(inlinePassphrase) : null,
       ts,
       ts,
     );
