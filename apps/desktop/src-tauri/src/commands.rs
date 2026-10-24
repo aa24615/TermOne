@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
@@ -115,12 +115,15 @@ pub async fn session_open(
         .unwrap_or(false);
     let log_file = if do_log { open_session_log(&app).ok() } else { None };
     let output: term_core::OutputSink = match log_file {
-        Some(mut f) => {
+        Some(f) => {
             let inner = output.clone();
+            let log_file = Mutex::new(f);
             Arc::new(move |id, data| {
                 inner(id, data.clone());
-                let _ = f.write_all(&data);
-                let _ = f.flush();
+                if let Ok(mut f) = log_file.lock() {
+                    let _ = f.write_all(&data);
+                    let _ = f.flush();
+                }
             })
         }
         None => output,
@@ -232,7 +235,7 @@ pub async fn sftp_upload(req: SftpRequest, local: String, remote: String) -> Cmd
 // ---------------- 本地文件浏览（SFTP 面板的本地侧栏） ----------------
 
 #[derive(Serialize)]
-struct LocalEntry {
+pub struct LocalEntry {
     name: String,
     is_dir: bool,
     size: u64,
