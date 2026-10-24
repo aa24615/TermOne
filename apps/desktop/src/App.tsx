@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { AboutDialog } from "./components/AboutDialog";
 import { AccountDialog } from "./components/AccountDialog";
-import { FileManager } from "./components/FileManager";
-import { Modal } from "./components/Dialog";
+import { Dialogs, Modal } from "./components/Dialog";
+import { PluginSurface } from "./plugin/PluginSurface";
+import { initPlugins } from "./plugin/runtime";
+import { matchesShortcut, useRegistry } from "./plugin/registry";
+import { CommandsDialog } from "./components/CommandsDialog";
 import { ProfileDialog } from "./components/ProfileDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -16,6 +19,7 @@ import { PaneView } from "./components/PaneView";
 import { isTauri } from "./env";
 import { allLeaves } from "./paneTree";
 import { useStore } from "./store";
+const PluginManagerDialog = lazy(() => import("./components/PluginManagerDialog"));
 
 export default function App() {
   const init = useStore((s) => s.init);
@@ -27,6 +31,7 @@ export default function App() {
 
   useEffect(() => {
     void init();
+    void initPlugins().catch(e => useStore.getState().showToast(String(e), "error"));
   }, [init]);
 
   useEffect(() => {
@@ -35,6 +40,8 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       const alt = e.altKey && !mod;
       const k = e.key.toLowerCase();
+      if (alt && e.shiftKey && k === "p") { e.preventDefault(); e.stopPropagation(); s.setDialog({ type: "commands" }); return; }
+      for (const command of Object.values(useRegistry.getState().items)) { if (command.kind === "command" && command.shortcut && matchesShortcut(e,command.shortcut)) { e.preventDefault(); e.stopPropagation(); command.run?.(); return; } }
 
       // Alt 组合键：终端聚焦时也可用；
       // stopPropagation 阻止 xterm 把它作为 ESC 序列发给 Shell
@@ -135,13 +142,16 @@ export default function App() {
           </div>
           <StatusBar />
         </main>
-        <FileManager />
+        <PluginSurface />
       </div>
 
       {dialog?.type === "profile" && <ProfileDialog profileId={dialog.profileId} />}
       {dialog?.type === "settings" && <SettingsDialog />}
       {dialog?.type === "account" && <AccountDialog />}
       {dialog?.type === "about" && <AboutDialog />}
+      {dialog?.type === "plugins" && <Suspense fallback={<Modal title="插件管理" onClose={() => useStore.getState().setDialog(null)}>正在加载…</Modal>}><PluginManagerDialog /></Suspense>}
+      {dialog?.type === "commands" && <CommandsDialog />}
+      <Dialogs />
 
       {confirmExit && (
         <Modal title="退出 TermOne" onClose={() => setConfirmExit(false)} width={380}>

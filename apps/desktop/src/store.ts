@@ -2,6 +2,10 @@ import { create } from "zustand";
 
 import { decryptData, encryptData, isEncrypted } from "./crypto";
 import { ipc } from "./ipc";
+import { applyCustomColors, setCustomTheme } from "./themes";
+import { ensureSessionEvents } from "./sessionEvents";
+import { retryDelay } from "./reconnection";
+import { saveLayouts, readLayouts, type SavedNode } from "./workspaceLayout";
 import {
   allLeaves,
   findPane,
@@ -12,20 +16,17 @@ import {
   splitLeaf,
   updatePaneBySession,
 } from "./paneTree";
-import { buildSessionRequest, buildSftpRequest } from "./profile";
+import { buildSessionRequest } from "./profile";
 import {
   DEFAULT_SETTINGS,
   type AppInfoDto,
   type AppSettings,
   type GroupRow,
-  type LocalEntry,
   type Pane,
   type ProfileRow,
-  type SftpEntry,
   type SettingRow,
   type SyncItem,
   type Tab,
-  type TransferItem,
 } from "./types";
 
 const AUTH_KEY = "termone.auth";
@@ -55,6 +56,8 @@ export type DialogState =
   | { type: "settings" }
   | { type: "account" }
   | { type: "about" }
+  | { type: "plugins" }
+  | { type: "commands" }
   | null;
 
 interface TermStore {
@@ -74,7 +77,10 @@ interface TermStore {
 
   init(): Promise<void>;
   loadSettings(): Promise<void>;
-  saveSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
+  saveSetting<K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K],
+  ): Promise<void>;
   loadProfiles(): Promise<void>;
   loadGroups(): Promise<void>;
   reloadAfterImport(): Promise<void>;
@@ -85,42 +91,31 @@ interface TermStore {
   setActiveTab(tabId: string): void;
   cycleTab(delta: number): void;
   setActivePane(paneId: string): void;
-  splitPane(paneId: string, dir: "row" | "col", profileId?: string | null): Promise<void>;
+  splitPane(
+    paneId: string,
+    dir: "row" | "col",
+    profileId?: string | null,
+  ): Promise<void>;
   closePane(paneId: string): void;
   setSplitSizes(splitId: string, sizes: number[]): void;
   markSessionExit(sessionId: string, code: number | null): void;
+  reconnectPane(paneId: string, manual?: boolean): Promise<void>;
+  stopReconnect(paneId: string): void;
+  openInPane(paneId: string, profileId: string | null): Promise<void>;
+  saveWorkspace(): Promise<void>;
+  restoreWorkspace(): Promise<void>;
   setDialog(dialog: DialogState): void;
   showToast(msg: string, kind?: Toast["kind"]): void;
   dismissToast(id: number): void;
-  authLogin(email: string, password: string, register: boolean): Promise<boolean>;
+  authLogin(
+    email: string,
+    password: string,
+    register: boolean,
+  ): Promise<boolean>;
   authLogout(): void;
   syncNow(silent?: boolean): Promise<boolean>;
   enableE2ee(passphrase: string): void;
   disableE2ee(): void;
-
-  // SFTP 图形化文件管理（R-01）
-  sftpOpen: boolean;
-  sftpProfileId: string | null;
-  sftpRemoteCwd: string;
-  sftpRemoteEntries: SftpEntry[];
-  sftpRemoteLoading: boolean;
-  sftpRemoteError: string | null;
-  sftpLocalCwd: string;
-  sftpLocalEntries: LocalEntry[];
-  sftpLocalLoading: boolean;
-  sftpLocalError: string | null;
-  sftpTransfers: TransferItem[];
-
-  toggleSftp(): void;
-  setSftpProfile(id: string): void;
-  sftpListRemote(path: string): Promise<void>;
-  sftpListLocal(path: string): Promise<void>;
-  sftpMkdirRemote(name: string): Promise<void>;
-  sftpDeleteRemote(entry: SftpEntry): Promise<void>;
-  sftpRenameRemote(from: string, to: string): Promise<void>;
-  sftpDownload(remote: string): Promise<void>;
-  sftpUpload(localFile: string): Promise<void>;
-  sftpLocalMkdir(name: string): Promise<void>;
 }
 
 function welcomeTab(): Tab {
@@ -134,21 +129,12 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 拼接远端路径（远端始终用正向斜杠；空 cwd 视为家目录）。 */
-function joinRemotePath(cwd: string, name: string): string {
-  if (!cwd) return name;
-  if (cwd.endsWith("/")) return cwd + name;
-  return `${cwd}/${name}`;
-}
-
-/** 拼接本地路径（保留操作系统分隔符）。 */
-function joinLocalPath(cwd: string, name: string): string {
-  if (!cwd) return name;
-  const sep = cwd.includes("\\") ? "\\" : "/";
-  return cwd.endsWith("/") || cwd.endsWith("\\") ? cwd + name : cwd + sep + name;
-}
-
-function clampInt(raw: string, min: number, max: number, fallback: number): number {
+function clampInt(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
@@ -156,6 +142,7 @@ function clampInt(raw: string, min: number, max: number, fallback: number): numb
 
 function applyThemeToDom(theme: string) {
   document.documentElement.dataset.theme = theme;
+  applyCustomColors(theme === "custom");
 }
 
 function serializeSetting(v: string | number | boolean | null): string {
@@ -195,6 +182,78 @@ async function apiFetch<T>(
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 /** 设置写盘防抖计时器（按 key）。 */
 const settingTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const retries = new Map<
+  string,
+  {
+    attempt: number;
+    timer?: ReturnType<typeof setTimeout>;
+    stable?: ReturnType<typeof setTimeout>;
+  }
+>();
+const stopped = new Set<string>();
+const connecting = new Set<string>();
+function cancelRetry(paneId: string) {
+  const r = retries.get(paneId);
+  if (r?.timer) clearTimeout(r.timer);
+  if (r?.stable) clearTimeout(r.stable);
+  retries.delete(paneId);
+}
+function paneAt(id: string) {
+  return useStore
+    .getState()
+    .tabs.flatMap((t) => allLeaves(t.layout))
+    .find((p) => p.id === id);
+}
+async function openSession(profile?: ProfileRow) {
+  await ensureSessionEvents();
+  const info = await ipc.sessionOpen(buildSessionRequest(profile));
+  if (profile) void ipc.profileTouch(profile.id).catch(() => {});
+  return info;
+}
+function scheduleReconnect(paneId: string) {
+  const st = useStore.getState();
+  const pane = paneAt(paneId);
+  if (
+    !pane ||
+    stopped.has(paneId) ||
+    pane.kind !== "ssh" ||
+    !pane.profileId ||
+    !st.settings.reconnectEnabled
+  )
+    return;
+  const retry = retries.get(paneId) ?? { attempt: 0 };
+  if (retry.timer) return;
+  const delay = retryDelay(
+    retry.attempt,
+    st.settings.reconnectDelaySeconds,
+    st.settings.reconnectMaxAttempts,
+  );
+  if (delay === null) {
+    st.showToast("自动重连已达到次数上限，可手动重新连接", "error");
+    return;
+  }
+  retry.attempt++;
+  retry.timer = setTimeout(() => {
+    retry.timer = undefined;
+    void useStore.getState().reconnectPane(paneId, false);
+  }, delay);
+  retries.set(paneId, retry);
+  useStore.setState((s) => ({
+    tabs: s.tabs.map((t) => ({
+      ...t,
+      layout: updatePaneBySession(t.layout, pane.sessionId!, {
+        exitInfo:
+          "连接已断开，" +
+          delay / 1000 +
+          " 秒后重试（" +
+          retry.attempt +
+          "/" +
+          st.settings.reconnectMaxAttempts +
+          "）",
+      }),
+    })),
+  }));
+}
 export function scheduleSync(delayMs = 3000) {
   const st = useStore.getState();
   if (!st.auth.token || !st.settings.autoSync) return;
@@ -214,22 +273,16 @@ export const useStore = create<TermStore>()((set, get) => ({
   tabs: [welcomeTab()],
   activeTabId: "welcome",
   activePaneId: null,
-  auth: { token: null, user: null, syncing: false, lastSyncAt: null, error: null },
+  auth: {
+    token: null,
+    user: null,
+    syncing: false,
+    lastSyncAt: null,
+    error: null,
+  },
   dialog: null,
   toasts: [],
   syncPassphrase: null,
-
-  sftpOpen: false,
-  sftpProfileId: null,
-  sftpRemoteCwd: "",
-  sftpRemoteEntries: [],
-  sftpRemoteLoading: false,
-  sftpRemoteError: null,
-  sftpLocalCwd: "",
-  sftpLocalEntries: [],
-  sftpLocalLoading: false,
-  sftpLocalError: null,
-  sftpTransfers: [],
 
   init: async () => {
     if (get().bootstrapped) return;
@@ -244,7 +297,9 @@ export const useStore = create<TermStore>()((set, get) => ({
       const raw = localStorage.getItem(AUTH_KEY);
       if (raw) {
         const saved = JSON.parse(raw) as { token: string; user: AuthUser };
-        set((s) => ({ auth: { ...s.auth, token: saved.token, user: saved.user } }));
+        set((s) => ({
+          auth: { ...s.auth, token: saved.token, user: saved.user },
+        }));
         void (async () => {
           try {
             await apiFetch(get().settings.serverUrl, saved.token, "/api/me");
@@ -272,6 +327,21 @@ export const useStore = create<TermStore>()((set, get) => ({
     const next = { ...DEFAULT_SETTINGS };
     for (const row of rows) {
       switch (row.key) {
+        case "savedWorkspace":
+          next.savedWorkspace = row.value;
+          break;
+        case "customTheme":
+          next.customTheme = row.value;
+          break;
+        case "reconnectEnabled":
+          next.reconnectEnabled = row.value !== "0";
+          break;
+        case "reconnectDelaySeconds":
+          next.reconnectDelaySeconds = clampInt(row.value, 1, 60, 5);
+          break;
+        case "reconnectMaxAttempts":
+          next.reconnectMaxAttempts = clampInt(row.value, 1, 10, 5);
+          break;
         case "theme":
           if (row.value) next.theme = row.value;
           break;
@@ -282,7 +352,12 @@ export const useStore = create<TermStore>()((set, get) => ({
           next.fontSize = clampInt(row.value, 8, 32, DEFAULT_SETTINGS.fontSize);
           break;
         case "scrollback":
-          next.scrollback = clampInt(row.value, 100, 100000, DEFAULT_SETTINGS.scrollback);
+          next.scrollback = clampInt(
+            row.value,
+            100,
+            100000,
+            DEFAULT_SETTINGS.scrollback,
+          );
           break;
         case "defaultProfileId":
           next.defaultProfileId = row.value || null;
@@ -304,13 +379,20 @@ export const useStore = create<TermStore>()((set, get) => ({
           break;
       }
     }
+    setCustomTheme(next.customTheme);
     applyThemeToDom(next.theme);
     set({ settings: next });
   },
 
   saveSetting: async (key, value) => {
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
+    if (key === "reconnectEnabled" && !value)
+      for (const id of [...retries.keys()]) get().stopReconnect(id);
     if (key === "theme") applyThemeToDom(String(value));
+    if (key === "customTheme") {
+      setCustomTheme(String(value));
+      applyThemeToDom(get().settings.theme);
+    }
     // 输入类设置按键级触发，防抖落盘避免连击 IPC 造成卡顿
     const pending = settingTimers[key];
     if (pending) clearTimeout(pending);
@@ -377,13 +459,15 @@ export const useStore = create<TermStore>()((set, get) => ({
 
   openTerminal: async (profileId) => {
     const st = get();
-    const profile = profileId ? st.profiles.find((p) => p.id === profileId) : undefined;
+    const profile = profileId
+      ? st.profiles.find((p) => p.id === profileId)
+      : undefined;
     if (profileId && !profile) {
       get().showToast("档案不存在", "error");
       return;
     }
     try {
-      const info = await ipc.sessionOpen(buildSessionRequest(profile));
+      const info = await openSession(profile);
       const pane = newPane({
         kind: info.kind,
         sessionId: info.id,
@@ -410,13 +494,16 @@ export const useStore = create<TermStore>()((set, get) => ({
     const tab = st.tabs.find((t) => t.id === tabId);
     if (!tab) return;
     for (const p of allLeaves(tab.layout)) {
+      cancelRetry(p.id);
+      stopped.delete(p.id);
       if (p.sessionId) void ipc.sessionClose(p.sessionId).catch(() => {});
     }
     let tabs = st.tabs.filter((t) => t.id !== tabId);
     let activeTabId = st.activeTabId;
     if (st.activeTabId === tabId) {
       const idx = st.tabs.findIndex((t) => t.id === tabId);
-      const next = tabs[Math.min(idx, tabs.length - 1)] ?? tabs[tabs.length - 1];
+      const next =
+        tabs[Math.min(idx, tabs.length - 1)] ?? tabs[tabs.length - 1];
       activeTabId = next?.id ?? null;
     }
     if (tabs.length === 0) {
@@ -450,7 +537,7 @@ export const useStore = create<TermStore>()((set, get) => ({
         return;
       }
       try {
-        const info = await ipc.sessionOpen(buildSessionRequest(profile));
+        const info = await openSession(profile);
         newPaneObj = newPane({
           kind: info.kind,
           sessionId: info.id,
@@ -467,13 +554,17 @@ export const useStore = create<TermStore>()((set, get) => ({
     }
     set((s) => ({
       tabs: s.tabs.map((t) =>
-        t.id === tab.id ? { ...t, layout: splitLeaf(t.layout, paneId, dir, newPaneObj) } : t,
+        t.id === tab.id
+          ? { ...t, layout: splitLeaf(t.layout, paneId, dir, newPaneObj) }
+          : t,
       ),
       activePaneId: newPaneObj.id,
     }));
   },
 
   closePane: (paneId) => {
+    cancelRetry(paneId);
+    stopped.delete(paneId);
     const st = get();
     const tab = st.tabs.find((t) => findPane(t.layout, paneId));
     if (!tab) return;
@@ -484,12 +575,19 @@ export const useStore = create<TermStore>()((set, get) => ({
       get().closeTab(tab.id);
       return;
     }
-    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, layout: remaining } : t)) }));
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tab.id ? { ...t, layout: remaining } : t,
+      ),
+    }));
   },
 
   setSplitSizes: (splitId, sizes) => {
     set((s) => ({
-      tabs: s.tabs.map((t) => ({ ...t, layout: setSplitSizes(t.layout, splitId, sizes) })),
+      tabs: s.tabs.map((t) => ({
+        ...t,
+        layout: setSplitSizes(t.layout, splitId, sizes),
+      })),
     }));
   },
 
@@ -499,9 +597,169 @@ export const useStore = create<TermStore>()((set, get) => ({
       tabs: s.tabs.map((t) => {
         const leaves = allLeaves(t.layout);
         if (!leaves.some((p) => p.sessionId === sessionId)) return t;
-        return { ...t, layout: updatePaneBySession(t.layout, sessionId, { exitInfo: info }) };
+        return {
+          ...t,
+          layout: updatePaneBySession(t.layout, sessionId, { exitInfo: info }),
+        };
       }),
     }));
+    const pane = get()
+      .tabs.flatMap((t) => allLeaves(t.layout))
+      .find((p) => p.sessionId === sessionId);
+    if (pane && (code === null || code === 255)) scheduleReconnect(pane.id);
+  },
+
+  stopReconnect: (paneId) => {
+    stopped.add(paneId);
+    cancelRetry(paneId);
+    const pane = paneAt(paneId);
+    if (pane?.sessionId && pane.exitInfo)
+      set((s) => ({
+        tabs: s.tabs.map((t) => ({
+          ...t,
+          layout: updatePaneBySession(t.layout, pane.sessionId!, {
+            exitInfo: "自动重连已停止，可手动重新连接",
+          }),
+        })),
+      }));
+  },
+  reconnectPane: async (paneId, manual = true) => {
+    if (connecting.has(paneId)) return;
+    if (manual) {
+      stopped.delete(paneId);
+      cancelRetry(paneId);
+    }
+    const pane = paneAt(paneId);
+    if (
+      !pane ||
+      stopped.has(paneId) ||
+      (!manual && !get().settings.reconnectEnabled)
+    )
+      return;
+    const profile = get().profiles.find((p) => p.id === pane.profileId);
+    if (!profile) return;
+    connecting.add(paneId);
+    try {
+      if (pane.sessionId)
+        await ipc.sessionClose(pane.sessionId).catch(() => {});
+      const info = await openSession(profile);
+      if (paneAt(paneId)?.sessionId !== pane.sessionId || stopped.has(paneId)) {
+        await ipc.sessionClose(info.id);
+        return;
+      }
+      set((s) => ({
+        tabs: s.tabs.map((t) => ({
+          ...t,
+          layout: updatePaneBySession(t.layout, pane.sessionId!, {
+            sessionId: info.id,
+            sessionTitle: info.title,
+            exitInfo: null,
+          }),
+        })),
+      }));
+      const retry = retries.get(paneId) ?? { attempt: 0 };
+      retry.stable = setTimeout(() => {
+        if (paneAt(paneId)?.sessionId === info.id && !paneAt(paneId)?.exitInfo)
+          cancelRetry(paneId);
+      }, 30_000);
+      retries.set(paneId, retry);
+    } catch (e) {
+      get().showToast("重连失败: " + String(e), "error");
+      scheduleReconnect(paneId);
+    } finally {
+      connecting.delete(paneId);
+    }
+  },
+  openInPane: async (paneId, profileId) => {
+    if (connecting.has(paneId)) return;
+    const pane = paneAt(paneId);
+    if (!pane || pane.sessionId) return;
+    const profile = get().profiles.find((p) => p.id === profileId);
+    if (profileId && !profile) return;
+    connecting.add(paneId);
+    try {
+      const info = await openSession(profile);
+      if (!paneAt(paneId)) {
+        await ipc.sessionClose(info.id);
+        return;
+      }
+      const replace = (
+        node: import("./types").PaneNode,
+      ): import("./types").PaneNode =>
+        node.type === "leaf"
+          ? node.pane.id === paneId
+            ? {
+                ...node,
+                pane: {
+                  ...node.pane,
+                  kind: info.kind,
+                  sessionId: info.id,
+                  sessionTitle: info.title,
+                  profileId: profile?.id ?? null,
+                  title: profile?.name ?? info.title,
+                },
+              }
+            : node
+          : { ...node, children: node.children.map(replace) };
+      set((s) => ({
+        tabs: s.tabs.map((t) => ({ ...t, layout: replace(t.layout) })),
+      }));
+    } catch (e) {
+      get().showToast(String(e), "error");
+    } finally {
+      connecting.delete(paneId);
+    }
+  },
+
+  saveWorkspace: async () => {
+    await get().saveSetting("savedWorkspace", saveLayouts(get().tabs));
+    get().showToast("布局已保存，可在欢迎页恢复", "success");
+  },
+  restoreWorkspace: async () => {
+    try {
+      const saved = readLayouts(get().settings.savedWorkspace);
+      const restore = async (
+        node: SavedNode,
+      ): Promise<import("./types").PaneNode> => {
+        if (node.type === "split") {
+          const children = [];
+          for (const child of node.children)
+            children.push(await restore(child));
+          return { ...node, id: crypto.randomUUID(), children };
+        }
+        if (node.kind === "welcome")
+          return leafNode(newPane({ kind: "welcome", title: "欢迎" }));
+        const profile = get().profiles.find((p) => p.id === node.profileId);
+        if ((node.profileId && !profile) || (node.kind !== "local" && !profile))
+          return leafNode(newPane({ title: "请选择档案" }));
+        try {
+          const info = await openSession(profile);
+          return leafNode(
+            newPane({
+              kind: info.kind,
+              profileId: profile?.id ?? null,
+              sessionId: info.id,
+              sessionTitle: info.title,
+              title: profile?.name ?? info.title,
+            }),
+          );
+        } catch (e) {
+          get().showToast(String(e), "error");
+          return leafNode(newPane({ title: profile?.name ?? "连接失败" }));
+        }
+      };
+      const tabs: Tab[] = [];
+      for (const node of saved)
+        tabs.push({ id: crypto.randomUUID(), layout: await restore(node) });
+      if (tabs.length)
+        set((s) => ({
+          tabs: [...s.tabs.filter((t) => t.id !== "welcome"), ...tabs],
+          activeTabId: tabs[0].id,
+          activePaneId: allLeaves(tabs[0].layout)[0]?.id ?? null,
+        }));
+    } catch (e) {
+      get().showToast("恢复布局失败: " + String(e), "error");
+    }
   },
 
   setDialog: (dialog) => set({ dialog }),
@@ -512,7 +770,8 @@ export const useStore = create<TermStore>()((set, get) => ({
     setTimeout(() => get().dismissToast(id), 4500);
   },
 
-  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismissToast: (id) =>
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   authLogin: async (email, password, register) => {
     const base = get().settings.serverUrl;
@@ -523,10 +782,18 @@ export const useStore = create<TermStore>()((set, get) => ({
         register ? "/api/auth/register" : "/api/auth/login",
         { method: "POST", body: JSON.stringify({ email, password }) },
       );
-      set((s) => ({ auth: { ...s.auth, token: data.token, user: data.user, error: null } }));
-      localStorage.setItem(AUTH_KEY, JSON.stringify({ token: data.token, user: data.user }));
+      set((s) => ({
+        auth: { ...s.auth, token: data.token, user: data.user, error: null },
+      }));
+      localStorage.setItem(
+        AUTH_KEY,
+        JSON.stringify({ token: data.token, user: data.user }),
+      );
       await get().syncNow(true);
-      get().showToast(register ? "注册成功，云端数据已就绪" : "登录成功", "success");
+      get().showToast(
+        register ? "注册成功，云端数据已就绪" : "登录成功",
+        "success",
+      );
       return true;
     } catch (e) {
       set((s) => ({ auth: { ...s.auth, error: errMsg(e) } }));
@@ -541,172 +808,32 @@ export const useStore = create<TermStore>()((set, get) => ({
   },
 
   enableE2ee: (passphrase) => {
-    set({ syncPassphrase: passphrase });
-    void get().saveSetting("e2eeEnabled", true);
-    void get().syncNow(true);
+    if (!passphrase.trim()) return;
+    const newlyEnabled = !get().settings.e2eeEnabled;
+    set((s) => ({
+      syncPassphrase: passphrase,
+      settings: { ...s.settings, e2eeEnabled: true },
+    }));
+    void (async () => {
+      await ipc.settingSet("e2eeEnabled", "1");
+      await ipc.syncSetLastPull(0);
+      if (newlyEnabled) await ipc.syncRequeueAll();
+      await get().syncNow(true);
+    })().catch((e) => get().showToast(String(e), "error"));
   },
 
   disableE2ee: () => {
-    set({ syncPassphrase: null });
-    void get().saveSetting("e2eeEnabled", false);
-  },
-
-  toggleSftp: () => {
-    const st = get();
-    const opening = !st.sftpOpen;
-    set({ sftpOpen: opening });
-    if (opening) {
-      let id = st.sftpProfileId;
-      if (!id || !st.profiles.some((p) => p.id === id)) {
-        id = st.profiles.find((p) => p.kind === "ssh")?.id ?? null;
-      }
-      set({ sftpProfileId: id });
-      if (id) void get().sftpListRemote("");
-    }
-  },
-
-  setSftpProfile: (id) => {
-    set({ sftpProfileId: id });
-    void get().sftpListRemote("");
-  },
-
-  sftpListRemote: async (path) => {
-    const st = get();
-    const profile = st.profiles.find((p) => p.id === st.sftpProfileId);
-    const req = buildSftpRequest(profile);
-    if (!req) {
-      set({
-        sftpRemoteError: "请选择一个 SSH 档案（SFTP 需密钥 / agent 认证，不支持密码）",
-        sftpRemoteEntries: [],
-      });
+    if (!get().syncPassphrase) {
+      get().showToast("请先解锁，才能将云端内容切换回未加密同步", "error");
       return;
     }
-    set({ sftpRemoteLoading: true, sftpRemoteError: null });
-    try {
-      const entries = await ipc.sftpList(req, path);
-      set({ sftpRemoteEntries: entries, sftpRemoteCwd: path, sftpRemoteLoading: false });
-    } catch (e) {
-      set({ sftpRemoteError: errMsg(e), sftpRemoteLoading: false, sftpRemoteEntries: [] });
-    }
-  },
-
-  sftpListLocal: async (path) => {
-    set({ sftpLocalLoading: true, sftpLocalError: null });
-    try {
-      const entries = await ipc.localList(path);
-      set({ sftpLocalEntries: entries, sftpLocalCwd: path, sftpLocalLoading: false });
-    } catch (e) {
-      set({ sftpLocalError: errMsg(e), sftpLocalLoading: false, sftpLocalEntries: [] });
-    }
-  },
-
-  sftpMkdirRemote: async (name) => {
-    const st = get();
-    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
-    if (!req) return;
-    const path = joinRemotePath(st.sftpRemoteCwd, name);
-    try {
-      await ipc.sftpMkdir(req, path);
-      get().showToast("目录已创建", "success");
-      await get().sftpListRemote(st.sftpRemoteCwd);
-    } catch (e) {
-      get().showToast(`创建目录失败: ${errMsg(e)}`, "error");
-    }
-  },
-
-  sftpDeleteRemote: async (entry) => {
-    const st = get();
-    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
-    if (!req) return;
-    const path = joinRemotePath(st.sftpRemoteCwd, entry.name);
-    try {
-      await ipc.sftpRemove(req, path, entry.isDir);
-      get().showToast(`已删除 ${entry.name}`, "success");
-      await get().sftpListRemote(st.sftpRemoteCwd);
-    } catch (e) {
-      get().showToast(`删除失败: ${errMsg(e)}（目录仅可为空）`, "error");
-    }
-  },
-
-  sftpRenameRemote: async (from, to) => {
-    const st = get();
-    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
-    if (!req) return;
-    try {
-      await ipc.sftpRename(req, joinRemotePath(st.sftpRemoteCwd, from), joinRemotePath(st.sftpRemoteCwd, to));
-      get().showToast("重命名成功", "success");
-      await get().sftpListRemote(st.sftpRemoteCwd);
-    } catch (e) {
-      get().showToast(`重命名失败: ${errMsg(e)}`, "error");
-    }
-  },
-
-  sftpDownload: async (remote) => {
-    const st = get();
-    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
-    if (!req) return;
-    if (!st.sftpLocalCwd) {
-      get().showToast("请先选择本地目录作为下载目标", "error");
-      return;
-    }
-    const remotePath = joinRemotePath(st.sftpRemoteCwd, remote);
-    const localPath = joinLocalPath(st.sftpLocalCwd, remote);
-    const item: TransferItem = { id: crypto.randomUUID(), kind: "download", name: remote, status: "running" };
-    set((s) => ({ sftpTransfers: [item, ...s.sftpTransfers] }));
-    try {
-      await ipc.sftpDownload(req, remotePath, localPath);
-      set((s) => ({
-        sftpTransfers: s.sftpTransfers.map((t) => (t.id === item.id ? { ...t, status: "done" } : t)),
-      }));
-      get().showToast(`已下载到 ${localPath}`, "success");
-      await get().sftpListLocal(st.sftpLocalCwd);
-    } catch (e) {
-      set((s) => ({
-        sftpTransfers: s.sftpTransfers.map((t) =>
-          t.id === item.id ? { ...t, status: "error", error: errMsg(e) } : t,
-        ),
-      }));
-    }
-  },
-
-  sftpUpload: async (localFile) => {
-    const st = get();
-    const req = buildSftpRequest(st.profiles.find((p) => p.id === st.sftpProfileId));
-    if (!req) return;
-    if (!st.sftpLocalCwd) {
-      get().showToast("请先选择本地目录作为上传源", "error");
-      return;
-    }
-    const localPath = joinLocalPath(st.sftpLocalCwd, localFile);
-    const remotePath = joinRemotePath(st.sftpRemoteCwd, localFile);
-    const item: TransferItem = { id: crypto.randomUUID(), kind: "upload", name: localFile, status: "running" };
-    set((s) => ({ sftpTransfers: [item, ...s.sftpTransfers] }));
-    try {
-      await ipc.sftpUpload(req, localPath, remotePath);
-      set((s) => ({
-        sftpTransfers: s.sftpTransfers.map((t) => (t.id === item.id ? { ...t, status: "done" } : t)),
-      }));
-      get().showToast(`已上传到 ${remotePath}`, "success");
-      await get().sftpListRemote(st.sftpRemoteCwd);
-    } catch (e) {
-      set((s) => ({
-        sftpTransfers: s.sftpTransfers.map((t) =>
-          t.id === item.id ? { ...t, status: "error", error: errMsg(e) } : t,
-        ),
-      }));
-    }
-  },
-
-  sftpLocalMkdir: async (name) => {
-    const st = get();
-    if (!st.sftpLocalCwd) return;
-    const path = joinLocalPath(st.sftpLocalCwd, name);
-    try {
-      await ipc.localMkdir(path);
-      await get().sftpListLocal(st.sftpLocalCwd);
-    } catch (e) {
-      get().showToast(`创建本地目录失败: ${errMsg(e)}`, "error");
-    }
+    set((s) => ({ settings: { ...s.settings, e2eeEnabled: false } }));
+    void (async () => {
+      await ipc.settingSet("e2eeEnabled", "0");
+      await ipc.syncSetLastPull(0);
+      await ipc.syncRequeueAll();
+      if (await get().syncNow(false)) set({ syncPassphrase: null });
+    })().catch((e) => get().showToast(String(e), "error"));
   },
 
   syncNow: async (silent = false) => {
@@ -717,49 +844,74 @@ export const useStore = create<TermStore>()((set, get) => ({
       const base = get().settings.serverUrl;
       const token = get().auth.token ?? "";
 
-      const dirty = await ipc.syncExportDirty();
-      if (dirty.length > 0) {
-        let toPush = dirty;
-        if (get().settings.e2eeEnabled && get().syncPassphrase) {
-          toPush = await Promise.all(
-            dirty.map(async (it) => ({ ...it, data: await encryptData(it.data, get().syncPassphrase!) })),
-          );
-        }
-        await apiFetch(base, token, "/api/sync/push", {
-          method: "POST",
-          body: JSON.stringify({ items: toPush }),
-        });
-        await ipc.syncMarkPushed(dirty);
-      }
-
+      // Unlock/decrypt the pull before writing anything to the server. A wrong key
+      // must never overwrite remote records, and a locked client must never push plaintext.
+      const enabled = st.settings.e2eeEnabled;
+      const passphrase = st.syncPassphrase;
+      if (enabled && !passphrase)
+        throw new Error("同步已锁定，请先输入 E2EE 口令");
       const since = await ipc.syncLastPull();
       const data = await apiFetch<{ serverTime: number; items: SyncItem[] }>(
         base,
         token,
         `/api/sync/pull?since=${encodeURIComponent(String(since))}`,
       );
-      if (data.items.length > 0) {
-        let toApply = data.items;
-        if (get().settings.e2eeEnabled && get().syncPassphrase) {
+      const toApply = await Promise.all(
+        data.items.map(async (it) => {
+          if (it.deleted) return { ...it, data: "{}" };
+          if (!isEncrypted(it.data)) return it;
+          if (!passphrase) throw new Error("云端包含加密数据，请先解锁 E2EE");
           try {
-            toApply = await Promise.all(
-              data.items.map(async (it) =>
-                isEncrypted(it.data)
-                  ? { ...it, data: await decryptData(it.data, get().syncPassphrase!) }
-                  : it,
-              ),
-            );
+            return { ...it, data: await decryptData(it.data, passphrase) };
           } catch {
-            get().showToast("同步解密失败：口令可能不正确", "error");
-            return false;
+            throw new Error("同步解密失败，口令不正确或数据已损坏");
           }
-        }
-        await ipc.syncApplyPull(toApply);
-        await get().loadProfiles();
-        await get().loadSettings();
+        }),
+      );
+      if (
+        token !== get().auth.token ||
+        base !== get().settings.serverUrl ||
+        enabled !== get().settings.e2eeEnabled ||
+        passphrase !== get().syncPassphrase
+      )
+        throw new Error("同步账号、服务或加密状态已变化，请重新同步");
+      if (toApply.length > 0) await ipc.syncApplyPull(toApply);
+      const dirty = await ipc.syncExportDirty();
+      if (dirty.length > 0) {
+        const toPush = enabled
+          ? await Promise.all(
+              dirty.map(async (it) => ({
+                ...it,
+                data: it.deleted
+                  ? "{}"
+                  : await encryptData(it.data, passphrase!),
+              })),
+            )
+          : dirty;
+        if (
+          token !== get().auth.token ||
+          base !== get().settings.serverUrl ||
+          enabled !== get().settings.e2eeEnabled ||
+          passphrase !== get().syncPassphrase
+        )
+          throw new Error("同步账号、服务或加密状态已变化，请重新同步");
+        await apiFetch(base, token, "/api/sync/push", {
+          method: "POST",
+          body: JSON.stringify({ items: toPush }),
+        });
+        if (token !== get().auth.token || base !== get().settings.serverUrl)
+          throw new Error("同步账号或服务已变化");
+        await ipc.syncMarkPushed(dirty);
       }
+      await get().loadProfiles();
+      await get().loadGroups();
+      await get().loadSettings();
+      if (token !== get().auth.token || base !== get().settings.serverUrl)
+        throw new Error("同步账号或服务已变化");
       await ipc.syncSetLastPull(data.serverTime ?? Date.now());
-      set((s) => ({ auth: { ...s.auth, syncing: false, lastSyncAt: Date.now() } }));
+      set((s) => ({
+        auth: { ...s.auth, syncing: false, lastSyncAt: Date.now() },
+      }));
       if (!silent) get().showToast("同步完成", "success");
       return true;
     } catch (e) {

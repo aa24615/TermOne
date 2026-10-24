@@ -136,7 +136,47 @@ const PALETTES: Record<string, TermPalette> = {
   },
 };
 
+let customTheme: ITheme | null = null;
+export function validateCustomTheme(raw: string): ITheme {
+  const value = JSON.parse(raw) as { terminal: ITheme };
+  if (
+    !value.terminal?.background ||
+    !value.terminal?.foreground ||
+    Object.values(value.terminal).some(
+      (v) => typeof v !== "string" || !/^#[0-9a-f]{6}$/i.test(v),
+    )
+  )
+    throw new Error(
+      "主题需要 terminal.background、terminal.foreground，颜色使用 #RRGGBB",
+    );
+  return value.terminal;
+}
+export function setCustomTheme(raw: string) {
+  customTheme = null;
+  try {
+    customTheme = validateCustomTheme(raw);
+  } catch {
+    /* invalid or absent custom theme */
+  }
+}
+export function applyCustomColors(enabled: boolean) {
+  const colors: Record<string, string | undefined> = {
+    "--bg": customTheme?.background,
+    "--bg-panel": customTheme?.background,
+    "--bg-input": customTheme?.background,
+    "--bg-elev": customTheme?.background,
+    "--fg": customTheme?.foreground,
+    "--accent": customTheme?.cursor,
+    "--term-bg": customTheme?.background,
+  };
+  for (const [key, color] of Object.entries(colors)) {
+    if (enabled && color)
+      document.documentElement.style.setProperty(key, color);
+    else document.documentElement.style.removeProperty(key);
+  }
+}
 export function getTermTheme(id: string): ITheme {
+  if (id === "custom" && customTheme) return customTheme;
   const p = PALETTES[id] ?? PALETTES.daylight;
   return {
     foreground: p.fg,

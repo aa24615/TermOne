@@ -2,10 +2,12 @@
 
 mod commands;
 mod state;
+mod plugins;
+mod workspace;
 
 use std::sync::Mutex;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use tauri::Manager;
 
 use term_core::{Db, SessionManager};
@@ -27,6 +29,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state::AppState {
             sessions: SessionManager::new(),
             db,
@@ -63,11 +66,33 @@ fn main() {
             commands::sync_set_last_pull,
             commands::backup_export,
             commands::backup_import,
+            plugins::plugin_list,
+            plugins::plugin_install,
+            plugins::plugin_set_enabled,
+            plugins::plugin_uninstall,
+            plugins::plugin_read_package,
+            plugins::plugin_load,
+            plugins::plugin_audit,
+            plugins::plugin_authorize,
+            plugins::plugin_call,
+            plugins::plugin_storage,
+            plugins::plugin_add_domain,
+            plugins::plugin_grant_path,
+            plugins::plugin_denied,
+            workspace::group_create,
+            workspace::group_rename,
+            workspace::group_set_collapsed,
+            workspace::group_delete,
+            workspace::group_move,
+            workspace::profile_recent,
+            workspace::profile_touch,
+            workspace::sync_requeue_all,
+            workspace::quake_set,
         ])
-        .setup(|app| {
+        .setup(|_app| {
             // Windows 隐藏系统标题栏由前端自绘；macOS 使用 Overlay 保留交通灯
-            #[cfg(target_os = "windows")]
-            if let Some(win) = app.get_webview_window("main") {
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Some(win) = _app.get_webview_window("main") {
                 let _ = win.set_decorations(false);
             }
             Ok(())

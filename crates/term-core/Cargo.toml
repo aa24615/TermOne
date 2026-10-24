@@ -14,5 +14,13 @@ log = { workspace = true }
 portable-pty = "0.8"
 serialport = "4"
 rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = "3"
 dirs = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }

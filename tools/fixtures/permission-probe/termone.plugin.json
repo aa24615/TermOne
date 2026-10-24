@@ -1,0 +1,31 @@
+{
+  "id": "org.example.probe",
+  "name": "权限隔离探针",
+  "version": "1.1.0",
+  "entry": "index.js",
+  "hostApi": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "author": "Example",
+  "description": "仅在隔离测试目录验证权限和崩溃边界",
+  "permissions": [
+    {
+      "type": "ui-panel"
+    },
+    {
+      "type": "ui-toast"
+    },
+    {
+      "type": "ipc",
+      "command": "local_list"
+    },
+    {
+      "type": "dialog-open"
+    }
+  ],
+  "files": [
+    "index.js"
+  ]
+}

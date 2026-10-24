@@ -75,6 +75,7 @@ export function TabBar() {
       >
         <IconPlus size={15} />
       </button>
+      <button className="btn small" title="保存当前分屏和档案引用" onClick={() => void useStore.getState().saveWorkspace()}>保存布局</button>
     </div>
   );
 }

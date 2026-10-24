@@ -5,6 +5,9 @@ import { useStore } from "../store";
 import { THEME_NAMES } from "../types";
 import { Modal } from "./Dialog";
 import { Dropdown } from "./Dropdown";
+import { useState } from "react";
+import { confirm } from "./Dialog";
+import { validateCustomTheme } from "../themes";
 
 const DEFAULT_FS = 14;
 const DEFAULT_SB = 5000;
@@ -15,6 +18,7 @@ function errMsg(e: unknown): string {
 }
 
 export function SettingsDialog() {
+  const [encryptionPassphrase, setEncryptionPassphrase] = useState("");
   const settings = useStore((s) => s.settings);
   const saveSetting = useStore((s) => s.saveSetting);
   const profiles = useStore((s) => s.profiles);
@@ -87,6 +91,7 @@ export function SettingsDialog() {
           ))}
         </div>
 
+        <label>导入主题 JSON</label><input type="file" accept=".json,application/json" onChange={e => { const file = e.target.files?.[0]; if (!file) return; void (async () => { try { if (file.size > 16000) throw new Error("主题文件超过 16 KiB"); const raw = await file.text(); validateCustomTheme(raw); await saveSetting("customTheme", raw); await saveSetting("theme", "custom"); showToast("主题已导入", "success"); } catch (e) { showToast(String(e), "error"); } })(); }} />
         <label>终端字体</label>
         <input
           value={settings.fontFamily}
@@ -184,28 +189,25 @@ export function SettingsDialog() {
           checked={settings.e2eeEnabled}
           onChange={(e) => {
             if (e.target.checked) {
-              const pass = window.prompt("设置同步加密口令（仅存于内存，服务端零知识）");
-              if (pass) enableE2ee(pass);
+              if (encryptionPassphrase) { enableE2ee(encryptionPassphrase); setEncryptionPassphrase(""); }
+              else showToast("请先在下方输入加密口令", "error");
             } else {
-              disableE2ee();
+              void confirm({ title: "关闭 E2EE", message: "后续同步会将当前数据改为服务端可读。必须先解锁。是否关闭？" }).then(ok => { if (ok) disableE2ee(); });
             }
           }}
         />
 
-        {settings.e2eeEnabled && (
+        {(
           <>
             <label>解锁口令</label>
             <div className="input-row">
               <input
                 type="password"
-                placeholder="重新输入口令以解密"
-                onBlur={(e) => {
-                  if (e.target.value) {
-                    enableE2ee(e.target.value);
-                    e.target.value = "";
-                  }
-                }}
+                placeholder="输入加密口令"
+                value={encryptionPassphrase}
+                onChange={e => setEncryptionPassphrase(e.target.value)}
               />
+              <button className="btn" disabled={!encryptionPassphrase} onClick={() => { enableE2ee(encryptionPassphrase); setEncryptionPassphrase(""); }}>{settings.e2eeEnabled ? "解锁" : "启用并解锁"}</button>
               <span className="form-hint">重启后需重新输入</span>
             </div>
           </>
@@ -216,6 +218,11 @@ export function SettingsDialog() {
           </p>
         </span>
 
+        <span className="form-span section-title">SSH 自动重连</span>
+        <label>异常断开后重连</label><input type="checkbox" checked={settings.reconnectEnabled} onChange={e => void saveSetting("reconnectEnabled", e.target.checked)} />
+        <label>首次等待（秒）</label><input type="number" min={1} max={60} value={settings.reconnectDelaySeconds} onChange={e => void saveSetting("reconnectDelaySeconds", Math.min(60, Math.max(1, Number(e.target.value) || 5)))} />
+        <label>最大重试次数</label><input type="number" min={1} max={10} value={settings.reconnectMaxAttempts} onChange={e => void saveSetting("reconnectMaxAttempts", Math.min(10, Math.max(1, Number(e.target.value) || 5)))} />
+        <span className="form-span"><p className="form-hint">指数退避，最长等待 60 秒。手动退出不重连；可随时在面板停止。SSH 每 30 秒发送心跳，连续 3 次无响应后退出。</p></span>
         <span className="form-span section-title">窗口</span>
 
         <label>退出前确认</label>
@@ -233,7 +240,7 @@ export function SettingsDialog() {
         />
         <span className="form-span">
           <p className="form-hint">
-            开启后，会话输出会写入本地日志文件，可在面板工具条点击「日志」回放查看。
+            开启后，会话输出会写入本地日志文件，可安装并启用「会话日志回放」插件查看。
           </p>
         </span>
       </div>

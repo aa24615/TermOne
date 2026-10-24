@@ -90,6 +90,9 @@ impl SftpRequest {
             "StrictHostKeyChecking=accept-new".into(),
             "-o".into(),
             "BatchMode=yes".into(),
+            "-o".into(), "ConnectTimeout=15".into(),
+            "-o".into(), "ServerAliveInterval=15".into(),
+            "-o".into(), "ServerAliveCountMax=3".into(),
         ];
         if let SftpAuth::Key { identity_file } = &self.auth {
             if !identity_file.is_empty() {
@@ -109,12 +112,14 @@ impl SftpRequest {
             Some(u) if !u.is_empty() => format!("{u}@{}", self.host),
             _ => self.host.clone(),
         };
+        a.push("--".into());
         a.push(target);
         a
     }
 
     /// 启动 `sftp -b -`，将批处理命令写入 stdin，返回 stdout；失败时将 stderr 并入错误。
     fn run_batch(&self, cmds: &[String]) -> Result<String> {
+        if cmds.iter().any(|c| c.contains(['\n', '\r', '\0'])) { return Err(TermError::Other("SFTP 路径不允许包含换行或空字节".into())); }
         let args = self.base_args();
         // 命令形如：sftp -b - -P <port> -o ... [-i ...] [-J ...] <user@host>
         let mut child = Command::new("sftp")
@@ -194,14 +199,18 @@ impl SftpRequest {
     /// 下载：远端 -> 本地。
     pub fn download(&self, remote: &str, local: &str) -> Result<()> {
         let remote = normalize_remote(remote);
-        self.run_batch(&[format!("get {} {}", quote(&remote), quote(local))])
-            .map(|_| ())
+        let partial = format!("{local}.termone-{}.part", uuid::Uuid::new_v4());
+        let result = self.run_batch(&[format!("get {} {}", quote(&remote), quote(&partial))])
+            .and_then(|_| std::fs::rename(&partial, local).map_err(TermError::Io));
+        if result.is_err() { let _ = std::fs::remove_file(&partial); }
+        result
     }
 
     /// 上传：本地 -> 远端。
     pub fn upload(&self, local: &str, remote: &str) -> Result<()> {
         let remote = normalize_remote(remote);
-        self.run_batch(&[format!("put {} {}", quote(local), quote(&remote))])
+        let partial = format!("{remote}.termone-{}.part", uuid::Uuid::new_v4());
+        self.run_batch(&[format!("put {} {}", quote(local), quote(&partial)), format!("rename {} {}", quote(&partial), quote(&remote))])
             .map(|_| ())
     }
 }

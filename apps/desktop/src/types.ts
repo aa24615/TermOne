@@ -74,7 +74,7 @@ export interface SettingRow {
 
 export interface SyncItem {
   itemId: string;
-  kind: "profile" | "setting";
+  kind: "profile" | "setting" | "group" | "snippet" | "plugin";
   key?: string;
   data: string;
   updatedAt: number;
@@ -203,6 +203,11 @@ export interface Tab {
 }
 
 export interface AppSettings {
+  savedWorkspace: string;
+  customTheme: string;
+  reconnectEnabled: boolean;
+  reconnectDelaySeconds: number;
+  reconnectMaxAttempts: number;
   theme: string;
   fontFamily: string;
   fontSize: number;
@@ -216,6 +221,11 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  savedWorkspace: "",
+  customTheme: "",
+  reconnectEnabled: true,
+  reconnectDelaySeconds: 5,
+  reconnectMaxAttempts: 5,
   theme: "daylight",
   fontFamily:
     '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace',

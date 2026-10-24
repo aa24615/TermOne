@@ -4,13 +4,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useStore } from "../store";
 import { isTauri } from "../env";
 import { firstLeaf } from "../paneTree";
-import { IconFolder, IconMinus, IconSquare, IconX } from "./icons";
+import { IconMinus, IconSquare, IconX } from "./icons";
+import { openPlugin, usePlugins } from "../plugin/runtime";
 
 export function TitleBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTabId = useStore((s) => s.activeTabId);
-  const sftpOpen = useStore((s) => s.sftpOpen);
-  const toggleSftp = useStore((s) => s.toggleSftp);
+  const plugins = usePlugins(s => s.installed);
   const [isMac, setIsMac] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -47,15 +47,7 @@ export function TitleBar() {
         {title}
       </div>
       <div className="titlebar-tools">
-        <button
-          className={`titlebar-tool${sftpOpen ? " active" : ""}`}
-          aria-label="SFTP 文件管理"
-          title="SFTP 文件管理"
-          onClick={toggleSftp}
-        >
-          <IconFolder size={15} />
-          <span className="titlebar-tool-label">文件</span>
-        </button>
+        {plugins.filter(p => p.enabled).map(p => <button className="titlebar-tool" key={p.id} onClick={() => void openPlugin(p.id)}>{p.manifest.name}</button>)}
       </div>
       {!isMac && (
         <div className="win-controls">

@@ -9,9 +9,7 @@
 //! - 审计事件模型：越权调用 / 安装卸载等可审计；
 //! - `.tpk` 清单解析与结构校验。
 //!
-//! 说明：实际的 Tauri IPC 命令（`plugin_install` 等）与前端加载器、错误边界
-//! 属于 S1 的其余部分，需在不受 SAC 管控的机器（或 CI）完成 Rust 构建后落地；
-//! 本层提供它们调用的「可信逻辑」，并已用 `cargo test -p term-core` 完整覆盖 P0–P5。
+//! 桌面端运行时与原生命令已接入；实现和验收证据见 docs/requirement-coverage.md。
 
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,7 +51,7 @@ impl HostApiVersion {
 pub enum PluginPermission {
     /// 允许调用的宿主 IPC 命令（白名单，精确匹配）。
     Ipc { command: String },
-    /// 允许联网的域名白名单（精确或同级子域匹配）。
+    /// 允许联网的域名白名单（精确匹配）。
     Net { domain: String },
     /// 允许使用插件私有键值存储（命名空间隔离，与宿主及其它插件互不干扰）。
     Storage,
@@ -63,6 +61,12 @@ pub enum PluginPermission {
     UiCommand,
     /// 允许订阅宿主事件（会话开始/结束、设置变更等）。
     EventSubscribe,
+    SessionRead,
+    SessionWrite,
+    UiToast,
+    UiSetting,
+    DialogOpen,
+    GlobalShortcut,
 }
 
 impl PluginPermission {
@@ -91,7 +95,10 @@ impl PluginPermission {
             PluginPermission::Storage
             | PluginPermission::UiPanel
             | PluginPermission::UiCommand
-            | PluginPermission::EventSubscribe => Ok(()),
+            | PluginPermission::EventSubscribe
+            | PluginPermission::SessionRead | PluginPermission::SessionWrite
+            | PluginPermission::UiToast | PluginPermission::UiSetting
+            | PluginPermission::DialogOpen | PluginPermission::GlobalShortcut => Ok(()),
         }
     }
 }
@@ -149,6 +156,7 @@ pub struct PluginManifest {
 impl PluginManifest {
     /// 校验清单合法性，返回首个错误原因。
     pub fn validate(&self) -> Result<()> {
+        if self.name.len()>256 || self.description.len()>4096 || self.permissions.len()>64 || self.files.len()>256 || self.version.len()>64 { return Err(TermError::Other("插件清单超过大小限制".into())); }
         if !is_reverse_domain(&self.id) {
             return Err(TermError::Other(format!(
                 "插件 id 必须为逆域名格式（如 com.termone.sftp）: {}",
@@ -164,7 +172,7 @@ impl PluginManifest {
                 self.version
             )));
         }
-        if self.entry.trim().is_empty() {
+        if !safe_package_path(&self.entry) {
             return Err(TermError::Other("插件 entry 不能为空".into()));
         }
         if self.files.is_empty() {
@@ -191,7 +199,7 @@ impl PluginManifest {
             .any(|p| matches!(p, PluginPermission::Ipc { command: c } if c == command))
     }
 
-    /// 判断某域名是否在声明权限内（精确或同级子域匹配，例如 `api.openai.com` 匹配 `*.openai.com`）。
+    /// 判断某域名是否在声明权限内（精确匹配，例如 `api.openai.com` 匹配 `*.openai.com`）。
     pub fn allows_net(&self, domain: &str) -> bool {
         let domain = domain.to_ascii_lowercase();
         self.permissions.iter().any(|p| match p {
@@ -219,7 +227,8 @@ fn is_reverse_domain(s: &str) -> bool {
     parts.iter().all(|p| {
         !p.is_empty()
             && p.len() <= 63
-            && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && !p.starts_with('-') && !p.ends_with('-')
+            && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     })
 }
 
@@ -255,6 +264,7 @@ const SECRET_IPC: &[&str] = &[
     "deleteSecret",
     "listSecrets",
     "exportKeyring",
+    "secret_set", "secret_get", "secret_delete", "secrets_get", "secrets_set",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,7 +275,7 @@ pub enum Decision {
 
 impl PermissionChecker {
     pub fn check_ipc(manifest: &PluginManifest, command: &str) -> Decision {
-        if SECRET_IPC.iter().any(|c| *c == command) {
+        if SECRET_IPC.iter().any(|c| *c == command) || command.to_ascii_lowercase().contains("secret") || command.to_ascii_lowercase().contains("keyring") {
             return Decision::Deny {
                 reason: format!("密钥环/凭据接口对所有插件禁用: {command}"),
             };
@@ -295,7 +305,10 @@ impl PermissionChecker {
             PluginPermission::Storage
             | PluginPermission::UiPanel
             | PluginPermission::UiCommand
-            | PluginPermission::EventSubscribe => {
+            | PluginPermission::EventSubscribe
+            | PluginPermission::SessionRead | PluginPermission::SessionWrite
+            | PluginPermission::UiToast | PluginPermission::UiSetting
+            | PluginPermission::DialogOpen | PluginPermission::GlobalShortcut => {
                 if manifest.permissions.contains(cap) {
                     Decision::Allow
                 } else {
@@ -388,6 +401,9 @@ impl AuditEvent {
 pub fn validate_tpk(manifest_json: &[u8], present_files: &[String]) -> Result<PluginManifest> {
     let m = PluginManifest::from_json(manifest_json)?;
     let present: HashSet<&String> = present_files.iter().collect();
+    if present.len() != present_files.len() || present_files.iter().any(|f| !safe_package_path(f)) {
+        return Err(TermError::Other("插件包含重复或不安全的文件路径".into()));
+    }
     if !present.contains(&m.entry) {
         return Err(TermError::Other(format!(
             "tpk 缺少入口文件: {}",
@@ -395,7 +411,7 @@ pub fn validate_tpk(manifest_json: &[u8], present_files: &[String]) -> Result<Pl
         )));
     }
     for f in &m.files {
-        if f.starts_with('/') || f.starts_with('\\') || f.contains("..") {
+        if !safe_package_path(f) {
             return Err(TermError::Other(format!("tpk 含非法路径（禁止穿越）: {f}")));
         }
         if !present.contains(f) {
@@ -405,9 +421,34 @@ pub fn validate_tpk(manifest_json: &[u8], present_files: &[String]) -> Result<Pl
     Ok(m)
 }
 
+/// Portable package paths: disallow Windows drive paths, alternate streams and traversal on every OS.
+pub fn safe_package_path(path: &str) -> bool {
+    !path.is_empty() && path.len() <= 240 && !path.contains(['\\', ':', '\0'])
+        && path.split('/').all(|p| !p.is_empty() && p != "." && p != ".." && !p.ends_with([' ', '.']))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_rejects_every_unsafe_path_even_when_not_declared() {
+        let json=valid_manifest_json();
+        for bad in ["../evil.js", "C:/evil.js", "a\\b", "/root", "a//b", "a/./b", "file:stream", "trailing."] {
+            assert!(!safe_package_path(bad), "{bad}");
+            assert!(validate_tpk(json.as_bytes(), &["index.js".into(), "style.css".into(), bad.into()]).is_err());
+        }
+        assert!(validate_tpk(json.as_bytes(), &["index.js".into(),"style.css".into(),"index.js".into()]).is_err());
+    }
+
+    #[test]
+    fn snake_case_secret_commands_are_denied_even_if_declared() {
+        let mut manifest=PluginManifest::from_json(valid_manifest_json().as_bytes()).unwrap();
+        for command in ["secret_get", "secret_set", "get_keyring", "SECRETS_READ"] {
+            manifest.permissions.push(PluginPermission::Ipc{command:command.into()});
+            assert!(matches!(PermissionChecker::check_ipc(&manifest,command),Decision::Deny{..}));
+        }
+    }
 
     fn valid_manifest_json() -> String {
         serde_json::json!({

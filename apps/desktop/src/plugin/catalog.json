@@ -1,0 +1,312 @@
+[
+  {
+    "id": "com.termone.sftp",
+    "name": "SFTP 文件管理",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "dialog-open"
+      },
+      {
+        "type": "storage"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_list"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_mkdir"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_remove"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_rename"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_download"
+      },
+      {
+        "type": "ipc",
+        "command": "sftp_upload"
+      },
+      {
+        "type": "ipc",
+        "command": "local_list"
+      },
+      {
+        "type": "ipc",
+        "command": "local_mkdir"
+      },
+      {
+        "type": "ipc",
+        "command": "profile_refs"
+      }
+    ],
+    "description": "本地与远端文件浏览、双向传输、失败重试",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.snippets",
+    "name": "常用命令",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "session-write"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_list"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_save"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_delete"
+      }
+    ],
+    "description": "保存并同步命令片段，预览后发送到选定会话",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.session-log",
+    "name": "会话日志回放",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "dialog-open"
+      },
+      {
+        "type": "ipc",
+        "command": "session_log_list"
+      },
+      {
+        "type": "ipc",
+        "command": "session_log_read"
+      }
+    ],
+    "description": "浏览历史会话日志，搜索与导出",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.broadcast",
+    "name": "广播输入",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "session-write"
+      },
+      {
+        "type": "ui-toast"
+      }
+    ],
+    "description": "明确选择多个会话，经确认后发送相同输入",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.ai-assist",
+    "name": "AI 命令辅助",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "net",
+        "domain": "api.openai.com"
+      }
+    ],
+    "description": "手动提交问题，预览命令；API Key 仅保留在本次内存",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.triggers",
+    "name": "触发器",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "storage"
+      },
+      {
+        "type": "session-read"
+      },
+      {
+        "type": "session-write"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "event-subscribe"
+      }
+    ],
+    "description": "匹配输出或新建会话，通知或按规则发送命令",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.theme-market",
+    "name": "主题市场",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "storage"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "ipc",
+        "command": "theme_install"
+      }
+    ],
+    "description": "内置精选配色与本地 JSON 导入；支持自托管主题目录",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.quake",
+    "name": "全局热键",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "storage"
+      },
+      {
+        "type": "global-shortcut"
+      },
+      {
+        "type": "ui-toast"
+      }
+    ],
+    "description": "用全局快捷键呼出和隐藏窗口",
+    "author": "TermOne",
+    "files": ["index.js"]
+  },
+  {
+    "id": "com.termone.zmodem",
+    "name": "Zmodem / Sixel",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "session-read"
+      },
+      {
+        "type": "session-write"
+      },
+      {
+        "type": "dialog-open"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "storage"
+      }
+    ],
+    "description": "终端文件传输与图片显示，按需加载",
+    "author": "TermOne",
+    "files": ["index.js"]
+  }
+]

@@ -24,7 +24,7 @@ const API = (process.env.CNB_API ?? "https://api.cnb.cool").replace(/\/+$/, "");
 const TOKEN = process.env.CNB_TOKEN;
 const REPO = process.env.CNB_REPO_SLUG_LOWERCASE;
 const TAG = process.env.RELEASE_TAG || process.env.CNB_BRANCH;
-const ASSET_EXTS = [".exe", ".msi", ".dmg", ".app.tar.gz", ".zip"];
+const ASSET_EXTS = [".exe", ".msi", ".dmg", ".app.tar.gz", ".zip", ".deb", ".rpm", ".appimage"];
 const RELEASE_WAIT_MS = 15_000;
 const RELEASE_WAIT_MAX = 40;
 

@@ -1,118 +1,53 @@
-# TermOne 需求 - 测试覆盖矩阵（P0–P5）
+# TermOne 需求实现与验证记录
 
-> 本文件记录本期按 `docs/需求.md` 与 `docs/竞品分析与需求规划.md` 实现的功能，及其对应的测试覆盖。
->
-> **2026-10-23 战略修订**：主窗口主打「轻量实用」，SFTP、AI 辅助等增值能力**全部改为插件按需安装**。
-> 新增 **R-20 插件运行时 + 插件管理（Must，前置）**，规格见 [`docs/插件系统设计.md`](./插件系统设计.md)，
-> 改造清单见本文「插件化改造」章节。已实现的 SFTP 后端 IPC 命令保留在核心，UI 迁移为官方插件 `com.termone.sftp`。
-> 测试执行层为 `crates/term-core`（README 明确的可单测核心库：存储 / LWW 同步 / 备份）。
-> 运行命令：
-> - 常规环境：`cargo test -p term-core`
-> - 本机（MSVC `link.exe` 被 Git Bash 的 MinGW `link` 抢占且缺 Windows SDK）：`cargo test -p term-core --target x86_64-pc-windows-gnu`
->   （需预置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu` 且 PATH 含 MinGW bin）
+> 更新：2026-10-24。依据 `需求.md`、`竞品分析与需求规划.md`、`插件系统设计.md`。记录本期实际交付及证据边界。
 
-## 优先级映射说明
+## 本期代码完成
 
-需求文档使用 MoSCoW（Must/Should/Could/Won't）与编号 R-01…R-19。本任务要求的「P0–P5 级别」按以下口径映射：
+- **R-20 插件运行时/管理**：安装、默认停用、启用、懒激活、停用、更新、卸载；9 项官方目录；本地 `.tpk`/目录导入、开发目录热加载、自托管 HTTPS registry 与 SHA-256；声明式第三方 UI、隔离 Worker、贡献点/命令面板/设置/状态栏、权限与审计。同步只携带元数据，本机授权独立。
+- **R-01 SFTP 插件化**：移除主窗口 FileManager；双栏、文件操作、双向拖拽、队列/失败重试；核心按 profileId 取凭据。文件选择授权限定本地路径，下载和上传采用临时文件后替换。
+- **R-02 分组**：嵌套分组新建/改名/删除/折叠、档案跨组拖动与排序、分组拖动防环、跨组搜索高亮、ProfileDialog 分组选择，同步与备份沿用核心表。
+- **R-03 分屏**：空面板内打开终端/档案、独立会话、保存/恢复布局；只保存结构和档案引用，不持久化会话 ID/凭据。
+- **R-04 自动重连**：接入会话 EOF/退出事件，SSH 传输失败（255/无退出码）才重试，默认 5 秒、有限指数退避、60 秒上限、手动重连/停止，关闭设置会取消排队重试；SSH 心跳 30 秒、3 次失败上限。稳定 30 秒后清零重试计数。重连建立新 shell，不承诺恢复失联远端进程/目录。
+- **R-05 E2EE**：锁定和错误口令均禁止导出、推送、应用拉取、推进游标；先解密拉取再推送。启用/解锁重新拉取，切换策略重新排队全部同步记录。加密开关是本机安全策略，远端同步不能关闭它。
+- **R-06/R-10 转发/跳板**：保留档案与 `-L/-R/-D/-J`；本期回归编译。SSH 关闭本地 escape，避免远端输入触发本地子进程。
+- **R-07 Snippets**：插件新增/修改/删除/选择会话/确认执行，变更参与自动同步。
+- **R-08 日志**：录制开关留核心；真实会话 UUID 命名；插件列表、搜索、回放和导出。
+- **R-09 最近会话**：连接时 touch，欢迎页加载最近 10 项，点击重连。
+- **R-11 主题市场**：精选离线主题、JSON 导入、自托管 HTTPS 主题索引；核心基础设置保留 JSON 导入。
+- **R-12 AI 辅助**：默认未安装/未启用，兼容 Chat Completions；地址/模型/Key 用户自填，Key 仅面板内存；手动问题发送前确认，不读终端、不执行结果。
+- **R-13 Quake**：可配置原生全局快捷键呼出/隐藏；停用注销。
+- **R-14 广播**：选择活动会话、预览并确认内容、可选追加回车。
+- **R-15 Zmodem/Sixel**：可撤销终端适配器、协议检测/确认/发送/接收/中止，单文件 64 MiB；Sixel 图像存储 16 MiB。
+- **R-16 Linux**：GTK/WebKit/系统依赖脚本、可复用 ARM64 构建镜像、DEB/RPM/AppImage，CNB Linux 发版任务和附件上传。Linux/Windows 使用自绘标题栏；Linux 密钥环接入 Secret Service。
+- **R-17 Triggers**：连接/输出文字匹配，通知或固定命令，冷却/每会话单次，命令动作须确认布防。
+- **R-21 Web SSH**：保持原有共享主机库、凭据默认不上云、JWT/TOFU/E2EE 降级；本期运行既有两组服务端冒烟。
 
-| 级别 | 含义 | 对应需求 |
-|---|---|---|
-| **P0** | 内核正确性 / 数据一致性（最不能错） | 既有 LWW 合并、软删除传播、备份完整性；及其在 R-02/R-07 中的复用 |
-| **P1** | Must 体验闭环（最高优先级，v0.2） | **R-20 插件运行时（前置）**、R-02 分组、R-04 自动重连+保活、R-03 分屏、**R-01 SFTP（以插件形态交付）** |
-| **P2** | Should 差异化加固（v0.3） | R-07 Snippets、R-09 最近会话、R-05 E2EE、R-08 日志、R-06/R-10 转发与跳板 |
-| **P3** | 上述功能的边界与并发 | 分组嵌套删除、并发同名冲突、同步幂等 |
-| **P4** | 健壮性（低优先） | Unicode、大体积负载、损坏输入、空同步 |
-| **P5** | 风险登记（RK）对应场景 | RK-04 并发同名冲突双副本/版本号、RK-07 重连无限刷屏守卫 |
+**R-18 移动端、R-19 重型 IDE 按需求 Won’t 保留不做。**
 
-## 本期完成（term-core，已单测验证）
+## 自动化证据
 
-| 需求 | 级别 | 实现要点 | 测试（cargo test -p term-core, 28 passed） |
-|---|---|---|---|
-| 核心 LWW / 软删除 / 备份 | P0 | `storage.rs` 既有逻辑，被 R-02/R-07 复用 | `lww_merge`、`profile_roundtrip`、`settings_roundtrip`、`backup_roundtrip` |
-| **R-02 连接分组/会话树** | P1 | `groups` 表；`profiles.group_id`；`group_create/rename/set_collapsed/delete`；`profile_search` 跨分组检索；分组纳入 LWW 同步与备份 | `group_crud_and_persistence`、`group_nesting_and_delete_reparents`、`profile_grouping_and_search_cross_group`、`group_sync_lww_and_backup`、`group_unicode_name` |
-| **R-04 SSH 自动重连 + 心跳保活** | P1 | `reconnect.rs`：`ReconnectPolicy`（指数退避+最大重试+抖动）、`KeepAlivePolicy`（空闲心跳）；纯逻辑零 I/O | `p0_first_delay_is_base`、`p1_exponential_growth_capped`、`p2_max_attempts_stops_reconnect`、`p3_factor_one_is_constant`、`p4_jitter_bounds`、`p5_edge_no_overflow_zero_base`、`keepalive_idle_triggers`、`keepalive_zero_interval_always` |
-| **R-07 常用命令 Snippets 片段库** | P2 | `snippets` 表；`snippet_save/list/delete`；纳入 LWW 同步与备份 | `snippet_crud_and_dirty`、`snippet_export_mark_pushed`、`snippet_sync_lww`、`snippet_backup_roundtrip_and_unicode` |
-| **R-09 最近会话/连接历史** | P2 | `profiles.last_used_at`；`profile_touch`、`profile_list_recent(limit)`；touch 不触发云同步 | `profile_recent_tracks_last_used`、`profile_recent_ordering_and_limit`、`profile_touch_does_not_set_dirty` |
-| **R-20 插件运行时 + 插件管理（地基 S1-逻辑/存储）** | **Must** | `plugin.rs`：manifest 校验（逆域名 id/语义化版本/权限声明）、权限沙箱 `PermissionChecker`（IPC 白名单、网络域名白名单、**密钥环硬编码拒绝**）、生命周期状态机 `PluginState`、审计事件 `AuditEvent`、`.tpk` 路径穿越校验；`storage.rs` 新增 `plugins` 表与 CRUD，纳入 LWW 同步与本地备份 | `p0_manifest_roundtrip_and_validate`、`p0_manifest_rejects_invalid_id_and_version`、`p0_tpk_manifest_valid`、`p1_permission_ipc_allow_deny`、`p1_permission_net_allow_deny`、`p1_lifecycle_transitions_valid_and_invalid`、`p2_capability_check`、`p3_audit_event_recorded_on_deny`、`p4_unicode_name_valid`、`p4_malformed_json_rejected`、`p4_empty_permissions_default_deny`、`p5_keyring_hard_deny_under_any_declaration`、`p5_tpk_rejects_path_traversal`、`plugin_crud_and_dirty`、`plugin_uninstall_clears_state_and_propagates`、`plugin_sync_lww`、`plugin_backup_roundtrip_and_unicode` |
-| **R-03 分屏 Split Panes** | P1 | `paneTree.ts` 面板树模型；`Tab` 承载 `layout` 树；水平/垂直分屏 + 拖拽分隔条；快捷键 Alt+Shift+H/V 分屏、Alt+Shift+X 关面板；`TerminalView` 改为按 `Pane` 渲染 | 前端 tsc + vite 构建通过；交互待真机验证 |
-| **R-08 会话日志 Session Logging** | P2 | `session_open` 按 `logSessions` 设置把输出字节 tee 到 `<app_data>/logs/<uuid>.log`；新增 `session_log_read` 回放命令；设置开关 + 面板「日志」回放弹窗（ANSI 清理） | 前端 tsc 通过；后端待本机构建验证 |
-| **R-06/R-10 端口转发/JumpHost** | P2 | `SessionRequest` 增 `proxyJump/localForward/remoteForward/dynamicForward`；`ssh.rs` 组装 `-J/-L/-R/-D`；`ProfileDialog` SSH 区新增字段 | 前端 tsc 通过；后端待本机构建验证 |
-| **R-05 同步端到端加密 E2EE** | P2 | 前端 Web Crypto（PBKDF2 + AES-GCM）加密同步 `data`，服务端零知识（仅存密文）；口令仅内存不落盘；设置开关 + 重新解锁 | 前端 tsc 通过；单元自测待补 |
-| **R-01 SFTP 图形化文件管理** ⚠️待插件化 | P1 | 复用系统 `sftp -b -` 批处理（**零新增 Rust 依赖**，与 `ssh.rs`「复用系统 ssh」一致）；`session/sftp.rs`：连接参数构造 + 批处理 + `ls -la` 解析；`list/mkdir/remove/rename/download/upload`；`commands.rs` 暴露 6 个 SFTP 命令 + `local_list/local_mkdir`；前端 `FileManager` 侧栏（远端/本地双栏、面包屑、导航、删除/重命名/上传/下载、传输队列），`@tauri-apps/plugin-dialog` 选目录 | 前端 tsc + vite 通过；`sftp.rs` 含 3 个解析单测（随 `cargo test -p term-core` 运行）；端到端待本机构建 + 真机验证。**已按插件化战略改判：6 个 IPC 命令留核心，UI 迁移为官方插件 `com.termone.sftp`** |
-| 边界 / 回归（P3–P5） | P3/P4/P5 | 损坏备份拒绝、空同步幂等、空关键字搜索、LWW 同戳不覆盖（RK-04） | `boundary_corrupt_backup_rejected`、`boundary_empty_sync_is_noop`、`boundary_search_empty_keyword_returns_all`、`boundary_lww_tie_not_applied` |
-| **R-21 Web 版 SSH 远程管理** | Must（服务端） | 服务端 `ssh2` 网关：`credCrypto.ts`（AES-256-GCM，主密钥 `cred.key` 0600 独立于库）、`sshHosts.ts`（主机 CRUD，**对外只返回元数据 + `hasCredential`**）、`sshWs.ts`（`/api/ws/ssh`，JWT 握手校验 + 双向透传 + resize + 主机公钥 TOFU）；**主机元数据与桌面端共用 `user_items`（kind='profile'，云同步同表同格式），凭据 `ssh_credentials` 按主机 id 关联**；生产托管 `apps/web/dist`。前端 `apps/web`（Vite+React+xterm.js）：登录、主机管理、临时连接、终端。**凭据默认不上传**：主机可无凭据存在，连接时由客户端临时提供（仅内存）；「保存到服务端」为客户端勾选项（默认关），取消勾选即 `clearCredential` 删除；本机凭据缓存 `credStore.ts`（localStorage，永不上传）+ 侧栏徽标（服务端 / 仅本机 / 未保存 / E2EE） | **本机冒烟已验证**：health/注册/登录/主机 CRUD 全通；列表响应与 DB 文件均不含明文；未登录 WS 关闭码 4401；无效 hostId 返回 error 帧；目标不可达回传 `ECONNREFUSED` error 帧。`tsc --noEmit` 与 `vite build` 通过。**凭据策略冒烟 `tools/ssh_cred_smoke.mjs` 13/13 通过**：不上传→`hasCredential=false`→无凭据直连被拒→临时凭据可用且不落盘→勾选后加密落盘→取消勾选即删除。**共用存储冒烟 `tools/ssh_shared_smoke.mjs` 22/22 通过**：桌面端 sync push→Web 立即可见（正向共用）；Web 保存→pull 数据与桌面端 `sync_apply_pull` 格式兼容（反向共用）；删除为 tombstone 随 pull 传播；E2EE 主机标记 `encrypted`、内容不解析、编辑 403；agent 主机连接时提示需客户端提供；桌面端 local 档案不混入 SSH 列表 |
+- `cargo test --workspace --release --locked`：**52 项 term-core + 4 项原生命令测试通过**。涵盖存储/LWW/备份、分组/最近/Snippets、重连策略、manifest/ZIP 路径/权限/密钥环拒绝、官方 catalog、目录 symlink 拒绝、E2EE 本机策略不被同步覆盖。
+- `npm run check`：桌面端、服务端、Web 三个工作区 TypeScript 通过。
+- `npm run test:desktop`：**14 项通过**。真实 Web Crypto 随机化、中文、错误口令、篡改；锁定/解密失败不推送不推进游标；密文同步；ZIP/HTTPS/digest；资源撤销与确认框取消；第三方本地写入拒绝；重连次数；布局不含会话 ID；拉取期间切换账号不应用/不推送原账号数据；正常退出不重连、传输失败可停止；欢迎页分屏可保存。
+- `node tools/zmodem-smoke.mjs`：**1 MiB 全字节二进制 offer/accept/send/receive/close 回环及内容一致性通过**。据此修复库 `accept()` 返回值使用错误。
+- `node tools/sftp-smoke.mjs`：本机 SSH2 SFTP fixture，**52 MiB 上传/列表；下载中断保留旧文件并清除 `.part`；重试字节一致；上传中断保留远端旧文件；上传重试；换行注入拒绝通过**。fixture 使用临时身份/known_hosts，不改用户 SSH 配置。
+- `node tools/ssh_cred_smoke.mjs`：**13/13**；`node tools/ssh_shared_smoke.mjs`：**22/22**。使用独立临时数据运行本地服务，测试结束清理。
+- 桌面 Vite 产物：SFTP、Zmodem、AI 等实现均为独立动态 chunk，插件管理/第三方沙箱独立 chunk。主 JS 约 552 KB；大小不是冷启动/RSS 量测。
 
-## 插件化改造（新战略，进行中）
+## macOS 真机界面证据
 
-> 依据：`docs/需求.md` §2/§3；规格：`docs/插件系统设计.md`；编号与排期：`docs/竞品分析与需求规划.md` §4.0。
-> 目标：主窗口只保留「轻量实用」的核心，SFTP / AI 辅助 / 广播 / 日志回放 / 主题市场等增值能力**全部改为插件按需安装**。
->
-> **注意**：插件化针对的是**桌面端主窗口**。Web 版（R-21）是独立的服务端 + 浏览器形态，
-> 其增值功能（SFTP、多标签等）后续同样建议以插件形态提供，但本期 Web 端仅做远程 SSH。
+使用独立 `TermOneQA.app` 与 `TERMONE_DATA_DIR`，不改 `/Applications/TermOne.app` 或正式应用数据。
 
-### 决策
+已交互验证：零插件无 SFTP 入口；官方 SFTP 安装仍默认停用；启用后入口与面板出现；系统文件选择器导入 `.tpk`；第三方 Hello Worker UI 和按钮通知；权限探针拒绝密钥环、未声明存储、越权网络及直接网络；Worker 无 DOM/Tauri；插件异常显示错误占位，主窗口可继续新建本地 zsh；左右分屏后新终端在空面板内打开；中文嵌套分组创建；Zmodem/Sixel 激活且真实终端渲染 Sixel 红色图块；第三方更新重新确认权限并恢复停用；已声明 local_list 但未选择路径时，原生文件系统权限仍拒绝；系统选择独立测试目录后只能读取授权目录，成功返回 1 项。
 
-- **插件形态**：前端插件为主（JS/TS 包 + 动态 `import()` 懒加载 + 受限 Host API），零新增原生依赖，跨平台免编译。
-- **边界**：**能力（涉密/高频 IPC 命令）留在核心，UI 与交互逻辑放进插件**。插件迭代**无需重编 Rust**——这对本机受限的构建环境尤为关键。
+## 构建与验收限制
 
-### 改造清单
+- macOS Apple Silicon：本机 release app/DMG 构建；应用使用 ad-hoc 签名，未 Apple 公证。产物位于仓库根 `target/release/bundle`。
+- Linux ARM64：Debian 12 容器 release 构建 DEB/RPM/AppImage、56 项 Rust 与 14 项前端测试通过；DEB 实际安装，DEB/AppImage 在独立数据目录的 Xvfb 图形环境下分别持续存活 12/15 秒并创建数据库。容器以 root 运行时仅对测试进程设置 WebKit sandbox 环境变量，不作为用户安装建议；容器验证不等于所有 Linux 桌面实机验证。
+- **尚未完成的验收证据**：零插件冷启动/RSS 与无插件基线 ≤5% 的严格量测、四分屏内存预算、Windows 实机/安装包回归、Linux x64/Wayland/多桌面、真实 AI 服务/Key、真实远端 Zmodem/Sixel 互通、真实外部网络弱网/转发/串口硬件。以上不能用编译或协议回环结果替代。
+- 自托管 registry 客户端已实现，未部署公共市场服务；没有虚构公共下载地址。内置插件版本随应用交付。
+- SFTP 重试会重新传整个文件；失败上传可能留下远端 `.part`，原目标不会被半文件覆盖。日志读取上限 8 MiB、列表上限 500。
+- Linux Secret Service 需要桌面 keyring 服务；无该服务的 headless 容器只验证无凭据启动，不代表密钥环成功。
 
-| 功能 | 现状 | 目标形态 | 是否需重编 Rust |
-|---|---|---|---|
-| SFTP（`FileManager.tsx`） | 已实现，内置 | 官方插件 `com.termone.sftp` | **否**（6 个 IPC 命令已在核心） |
-| 会话日志回放 | 已实现，内置弹窗 | 官方插件 `com.termone.session-log`（录制开关留核心） | 否 |
-| Snippets UI | 后端已实现 | 官方插件 `com.termone.snippets` | 否 |
-| 插件运行时（R-20） | **S1 部分实现（纯逻辑层 + plugins 表，本机已单测）** | 核心新增 `plugin/{types,hostApi,registry,loader,manager,sandbox}` + `plugins` 表 + 4 个 IPC 命令；**已完成**：manifest/权限沙箱/生命周期/审计/.tpk 校验（plugin.rs）+ plugins 存储表（storage.rs）。**待补**：注册表/加载器/沙箱运行时、4 个 IPC 命令、管理对话框 | **是**（新增 IPC 命令待 CI 构建） |
-| AI 辅助 / 广播 / Quake / Triggers / 主题市场 / Zmodem | 未实现 | 全部为插件 | 否（若需新能力则另补命令） |
-
-### 实施分期与验证口径
-
-| 阶段 | 内容 | 可否本机验证 |
-|---|---|---|
-| S1 运行时地基 | 类型/Host API/注册表/加载器/沙箱/`plugins` 表/IPC 命令/管理对话框 | 前端可（`tsc` + `vite`）；IPC 命令需 CI 构建 |
-| S2 样板插件 | `FileManager.tsx` → `com.termone.sftp` | **可**（纯前端） |
-| S3 分发 | `.tpk` 打包导入、registry、更新、审计 UI | 前端可 |
-| S4 增值插件 | AI → 广播 → 日志回放 → Triggers → Quake → 主题市场 → Zmodem | 可 |
-
-### 插件化验收口径（对应插件系统设计 §9）
-
-| # | 口径 |
-|---|---|
-| AC-1 | 零插件时冷启动/内存与无插件版差异 ≤ 5% |
-| AC-2 | 主 bundle 不含插件代码，SFTP 落在独立 chunk |
-| AC-3 | 插件崩溃被错误边界隔离，主窗口与会话不中断 |
-| AC-4/5 | 越权 IPC 拒绝并记录审计；密钥环无接口可用 |
-| AC-6/7 | 停用/卸载后贡献点与私有存储无残留 |
-| AC-8/9 | 第三方插件需确认权限与风险；AI 插件未配 Key 时不发起网络请求 |
-
-## 本期货未覆盖（需前端 / Tauri / 网络，非 term-core 单测范围）
-
-> R-01 / R-03 / R-05 / R-06 / R-08 / R-10 已实现并移入上方「本期完成」表；其中 SFTP、分屏、转发、日志等交互层需在本机（或 CI）完成 Rust 构建后做端到端验证。
-
-| 需求 | 级别 | 未做原因 | 建议下一步 |
-|---|---|---|---|
-| **R-20 插件运行时 + 插件管理** | **Must** | **S1 逻辑层与 plugins 表已完成并单测（48 passed）**；剩余：注册表/加载器/沙箱运行时、4 个 IPC 命令、管理对话框（需 CI 构建） | **最高优先**：已完成地基，下一步补齐 S1 其余部分并做 SFTP 插件化（S2） |
-| R-11 主题市场（插件） | Could | 需 registry 与分发链路 | 待 R-20 完成后以插件形态交付 |
-| R-12 AI 命令辅助（插件） | Could | 需外部 API、隐私与轻量权衡 | 以默认关闭插件交付，域名白名单 + 用户自填 Key |
-| R-13 Quake / R-14 广播 / R-17 Triggers（插件） | Could | 增值层 | R-20 完成后批量插件化 |
-| R-15 Zmodem / Sixel（插件） | Could | 低优先、工程量中等 | 插件形态后置 |
-| R-16 Linux 支持 | Could | 扩平台，维护面增加 | 轻量定位站稳后再排期 |
-| R-18 移动端 / R-19 重型 IDE | Won't | 超出 Tauri 桌面范畴 / 与轻量红线冲突 | 不做 |
-
-## 已知约束与风险
-
-- **RK-07（无限重连刷屏）**：已由 `ReconnectPolicy.max_attempts` + `next_delay` 返回 `None` 显式停止覆盖；测试 `p2_max_attempts_stops_reconnect` 守护。
-- **RK-04（并发同名冲突丢数据）**：LWW 采用「远端 updated_at 严格大于才覆盖」，相等时间戳不覆盖本地（测试 `boundary_lww_tie_not_applied`）；后续如需双副本可加版本号字段。
-- **数据迁移**：`open_at` 对存量库执行 `ALTER TABLE` 补齐 `group_id` / `last_used_at`，新库经 `CREATE TABLE IF NOT EXISTS` 自带新列。
-- **反序列化兼容**：新增 `group_id` / `last_used_at` 标记 `#[serde(default)]`，旧前端未下发这些字段时仍可正常反序列化。
-- **本机 Rust 构建受限（RK-08，环境约束非代码问题）**：根因是开发机 **Windows 智能应用控制（Smart App Control）处于强制模式**（`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState = 1`），拦截 cargo 临时编译出的**未签名 build-script exe**（`target/**/build-script-build.exe`），报 `os error 4551`（应用程序控制策略已阻止此文件）。硬证据：构建日志中成功执行的 build-script 数为 **0**；手动执行 build-script-build.exe 为 Permission denied。因此 R-08/R-06/R-10/R-01 的 Rust 侧改动**仅经代码走查 + 前端 tsc/vite 验证**，尚未在本机编译/跑测。需在不受管控的机器（或 CI）执行 `cargo test -p term-core --target x86_64-pc-windows-gnu` 与 `npm run tauri build` 做端到端验证后再发版。
-  - **重要教训**：build-script 的**输出只要还在缓存里，cargo 就不会执行它**。因此「某 crate 能编译成功」不等于「策略放行了该 crate」。本机执行 `cargo clean` / `rm -rf target/release` **前必须先确认 build-script 输出是否有备份**，否则所有 build-script 将被迫重跑并全部被拦，本地打包彻底失效（本次已踩坑）。
-  - **缓解**：插件化战略本身即为结构性缓解——插件为纯前端，S1/S2/S3 迭代无需重编 Rust，本机可用 `tsc` + `vite` 完整验证。
-- **插件化风险（详见 `docs/竞品分析与需求规划.md` 风险登记册）**：RK-09 插件权限滥用（最小权限 + manifest 声明 + IPC/域名白名单 + 密钥环硬编码拒绝 + 审计日志）；RK-10 插件膨胀反噬轻量（默认不启用 + 懒加载 + 独立 chunk + 零插件开销预算 ≤ 5%）；RK-11 插件崩溃传染（错误边界 + activate 超时 + deactivate 强制回收）。
-
-## 测试汇总
-
-- 总用例：**48**（覆盖 storage / reconnect / plugin / sftp 各模块）
-- 结果：`48 passed; 0 failed`
-- 命令：`cargo test -p term-core --target x86_64-pc-windows-gnu`（本机）/ `cargo test -p term-core`（常规）
-- 本次新增：修复 SFTP 符号链接名解析缺陷（R-01，1 例修正）；R-20 插件运行时地基新增 17 例 P0–P5 单测（plugin.rs 13 + storage 4）。
+此前文档中的 Windows SAC 构建限制属于历史环境；当前 macOS / Linux 构建证据已单列，不再沿用“后端未编译”的过时结论。

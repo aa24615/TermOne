@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use term_core::{
     list_ports, list_shells, secrets, BackupStats, GroupRow, ProfileRow, SessionInfo,
@@ -113,21 +113,21 @@ pub async fn session_open(
         .flatten()
         .map(|v| v != "0")
         .unwrap_or(false);
-    let log_file = if do_log { open_session_log(&app).ok() } else { None };
-    let output: term_core::OutputSink = match log_file {
-        Some(f) => {
-            let inner = output.clone();
-            let log_file = Mutex::new(f);
-            Arc::new(move |id, data| {
-                inner(id, data.clone());
-                if let Ok(mut f) = log_file.lock() {
-                    let _ = f.write_all(&data);
-                    let _ = f.flush();
+    let output: term_core::OutputSink = if do_log {
+        let inner = output.clone();
+        let handle = app.clone();
+        let log_file: Mutex<Option<File>> = Mutex::new(None);
+        Arc::new(move |id, data| {
+            inner(id, data.clone());
+            if let Ok(mut file) = log_file.lock() {
+                if file.is_none() { *file = open_session_log(&handle, id).ok(); }
+                if let Some(file) = file.as_mut() {
+                    let _ = file.write_all(&data);
+                    let _ = file.flush();
                 }
-            })
-        }
-        None => output,
-    };
+            }
+        })
+    } else { output };
 
     state
         .sessions
@@ -136,24 +136,17 @@ pub async fn session_open(
 }
 
 /// 在应用数据目录下创建 `logs/<uuid>.log`，返回可写文件句柄。
-fn open_session_log(app: &AppHandle) -> Result<File, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("logs");
+fn open_session_log(app: &AppHandle, id: uuid::Uuid) -> Result<File, String> {
+    let dir = crate::workspace::data_dir(&app)?.join("logs");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}.log", uuid::Uuid::new_v4()));
+    let path = dir.join(format!("{id}.log"));
     File::create(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn session_log_read(app: AppHandle, id: String) -> CmdResult<String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("logs");
+    let id = parse_id(&id)?;
+    let dir = crate::workspace::data_dir(&app)?.join("logs");
     let path = dir.join(format!("{}.log", id));
     match std::fs::read_to_string(&path) {
         Ok(s) => Ok(s),

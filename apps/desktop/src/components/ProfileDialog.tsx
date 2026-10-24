@@ -32,6 +32,8 @@ export function ProfileDialog({ profileId }: Props) {
   const showToast = useStore((s) => s.showToast);
 
   const existing = profileId ? profiles.find((p) => p.id === profileId) : undefined;
+  const groups = useStore(s => s.groups);
+  const [groupId, setGroupId] = useState(existing?.groupId ?? "");
 
   const [kind, setKind] = useState<ProfileKind>(existing?.kind ?? "local");
   const [name, setName] = useState(existing?.name ?? "");
@@ -141,7 +143,7 @@ export function ProfileDialog({ profileId }: Props) {
       kind,
       name: name.trim() || defaultProfileName(kind, config as never),
       config: config as never,
-      groupId: existing?.groupId ?? null,
+      groupId: groupId || null,
       sortOrder: existing?.sortOrder ?? 0,
       updatedAt: Date.now(),
       createdAt: existing?.createdAt ?? Date.now(),
@@ -205,6 +207,7 @@ export function ProfileDialog({ profileId }: Props) {
           ))}
         </div>
 
+        <label>连接分组</label><select value={groupId} onChange={e => setGroupId(e.target.value)}><option value="">未分组</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
         {kind === "local" && (
           <>
             <label>Shell</label>

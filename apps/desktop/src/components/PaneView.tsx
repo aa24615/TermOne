@@ -1,17 +1,10 @@
-import { Fragment, useState, type MouseEvent } from "react";
+import { Fragment, type MouseEvent } from "react";
 
-import { ipc } from "../ipc";
 import { useStore } from "../store";
 import type { PaneNode } from "../types";
 import { TerminalView } from "./TerminalView";
 import { WelcomePane } from "./WelcomePane";
-import { Modal } from "./Dialog";
-import { IconInfo, IconSplitH, IconSplitV, IconX } from "./icons";
-
-/** 去除 ANSI 转义序列，便于日志回放阅读。 */
-function stripAnsi(s: string): string {
-  return s.replace(/\[[0-9;?]*[ -/]*[@-~]/g, "");
-}
+import { IconSplitH, IconSplitV, IconX } from "./icons";
 
 function startResize(
   e: MouseEvent,
@@ -58,18 +51,10 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
   const setActivePane = useStore((s) => s.setActivePane);
   const splitPane = useStore((s) => s.splitPane);
   const closePane = useStore((s) => s.closePane);
-  const openTerminal = useStore((s) => s.openTerminal);
-  const [log, setLog] = useState<string | null>(null);
-
-  const openLog = async (sessionId: string) => {
-    try {
-      const text = await ipc.sessionLogRead(sessionId);
-      setLog(stripAnsi(text));
-    } catch {
-      setLog("(无法读取日志)");
-    }
-  };
-
+  const openInPane = useStore((s) => s.openInPane);
+  const profiles = useStore(s => s.profiles);
+  const reconnect = useStore(s => s.reconnectPane);
+  const stopReconnect = useStore(s => s.stopReconnect);
   if (node.type === "split") {
     return (
       <div className={`split ${node.dir === "row" ? "split-row" : "split-col"}`}>
@@ -100,14 +85,15 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
       {pane.kind === "welcome" ? (
         <WelcomePane />
       ) : pane.sessionId ? (
-        <TerminalView pane={pane} active={active} />
+        <TerminalView key={pane.sessionId} pane={pane} active={active} />
       ) : (
         <div className="pane-empty">
           <p>空面板</p>
           <div className="pane-empty-actions">
-            <button className="btn small" onClick={() => void openTerminal(null)}>
+            <button className="btn small" onClick={() => void openInPane(pane.id, null)}>
               新建本地终端
             </button>
+            <select aria-label="在当前分屏连接档案" defaultValue="" onChange={e => { if (e.target.value) void openInPane(pane.id, e.target.value); }}><option value="">或选择档案连接</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
           </div>
         </div>
       )}
@@ -115,6 +101,7 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
       {pane.exitInfo && (
         <div className="term-end">
           <span>{pane.exitInfo}</span>
+          {pane.kind === "ssh" && <><button className="btn small" onClick={() => void reconnect(pane.id)}>立即重连</button><button className="btn small" onClick={() => stopReconnect(pane.id)}>停止自动重连</button></>}
           <button className="btn small" onClick={() => closePane(pane.id)}>
             关闭面板
           </button>
@@ -126,15 +113,6 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
           {pane.title || "空面板"}
         </span>
         <span className="pane-bar-actions">
-          {pane.sessionId && (
-            <button
-              className="icon-btn"
-              title="会话日志回放"
-              onClick={() => void openLog(pane.sessionId!)}
-            >
-              <IconInfo size={13} />
-            </button>
-          )}
           <button
             className="icon-btn"
             title="水平分屏（上下）"
@@ -155,11 +133,7 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
         </span>
       </div>
 
-      {log !== null && (
-        <Modal title={`会话日志 · ${pane.title || pane.sessionId || ""}`} onClose={() => setLog(null)} width={720}>
-          <pre className="log-view">{log || "（暂无日志，请先在设置中开启「记录会话日志」）"}</pre>
-        </Modal>
-      )}
+
     </div>
   );
 }

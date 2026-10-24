@@ -1,0 +1,113 @@
+.plugin-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.plugin-stack label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plugin-stack .check-row {
+  flex-direction: row;
+  align-items: center;
+}
+.plugin-stack .check-row input {
+  width: auto;
+}
+.plugin-stack textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 90px;
+}
+.plugin-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.plugin-actions input {
+  flex: 1;
+  min-width: 160px;
+}
+.plugin-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+.plugin-card p {
+  margin: 8px 0;
+}
+.plugin-card small,
+.muted {
+  color: var(--fg-dim);
+}
+.plugin-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.plugin-log {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 60vh;
+  overflow: auto;
+  font-size: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.plugin-audit {
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.file-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.file-columns > section {
+  min-width: 0;
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 8px;
+}
+.file-columns h4 {
+  overflow-wrap: anywhere;
+  margin: 0 0 8px;
+}
+.plugin-file-list {
+  height: 260px;
+  overflow: auto;
+  margin-top: 8px;
+}
+.file-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  padding: 7px 4px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.file-row:hover,
+.file-row.selected {
+  background: var(--accent-soft);
+}
+.file-row small {
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+.error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}

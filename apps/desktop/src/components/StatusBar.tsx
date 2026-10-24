@@ -2,6 +2,7 @@ import { profileSubtitle } from "../profile";
 import { useStore } from "../store";
 import { firstLeaf } from "../paneTree";
 import type { ProfileRow, Tab } from "../types";
+import { useRegistry } from "../plugin/registry";
 
 function describeTarget(tab: Tab, profile?: ProfileRow): string {
   const leaf = firstLeaf(tab.layout);
@@ -19,6 +20,7 @@ export function StatusBar() {
   const profiles = useStore((s) => s.profiles);
   const auth = useStore((s) => s.auth);
   const appInfo = useStore((s) => s.appInfo);
+  const contributions = useRegistry(s => s.items);
 
   const tab = tabs.find((t) => t.id === activeTabId);
   const leaf = tab ? firstLeaf(tab.layout) : null;
@@ -41,6 +43,7 @@ export function StatusBar() {
         {target}
       </span>
       <span className="flex-1" />
+      {Object.entries(contributions).filter(([,i]) => i.kind === "status").slice(0,4).map(([key,item]) => <span key={key} title={item.pluginId}>{item.title}</span>)}
       <span className="status-right">
         {syncLabel}
         {appInfo ? ` · v${appInfo.version}` : ""}

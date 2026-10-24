@@ -43,12 +43,15 @@ pub(crate) fn spawn(
 ) -> Result<Spawned> {
     let mut argv: Vec<String> = vec![
         "ssh".into(),
+        "-e".into(), "none".into(),
         "-p".into(),
         port.to_string(),
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
         "ServerAliveInterval=30".into(),
+        "-o".into(),
+        "ServerAliveCountMax=3".into(),
     ];
     if let SshAuth::Key { identity_file } = &auth {
         if !identity_file.is_empty() {
@@ -83,6 +86,7 @@ pub(crate) fn spawn(
         argv.push("-D".into());
         argv.push(dp.to_string());
     }
+    argv.push("--".into());
     argv.push(match &user {
         Some(u) if !u.is_empty() => format!("{u}@{host}"),
         _ => host.clone(),

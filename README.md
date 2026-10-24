@@ -1,6 +1,6 @@
 # TermOne
 
-轻量、漂亮的跨平台终端软件（Windows / macOS），参考 Tabby、WindTerm 设计。
+轻量、漂亮的跨平台终端软件（Windows / macOS / Linux），参考 Tabby、WindTerm 设计。
 
 > GitHub：https://github.com/aa24615/TermOne
 
@@ -45,7 +45,7 @@
 
 ## 快速开始（桌面端）
 
-依赖：Node.js ≥ 23.4（服务端使用内置 `node:sqlite`）、Rust ≥ 1.77；Windows 需 MSVC 工具链与 WebView2，macOS 需 Xcode Command Line Tools。
+依赖：Node.js ≥ 23.4（服务端使用内置 `node:sqlite`）、Rust 1.99.1（本期验证版本）；Windows 需 MSVC 工具链与 WebView2，macOS 需 Xcode Command Line Tools；Linux 依赖见 `tools/linux/dependencies.sh`。
 
 ```bash
 # 1) 安装依赖（npm workspaces）
@@ -86,7 +86,7 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 输入版本号（如 `0.1.0`）确认即可。流水线会自动：
 
 1. 创建并推送 `v0.1.0` 标签
-2. Windows / macOS 自托管节点打包并上传 Release 附件（Release 自动创建）
+2. Windows / macOS 自托管节点与 Linux 云端节点打包并上传 Release 附件（Release 自动创建）
 
 服务端镜像独立发布：点击「发布服务端镜像」按钮输入版本号，与客户端发版互不影响。
 
@@ -96,7 +96,8 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 | 发版 Release（客户端）→ `desktop-windows` | 自托管 Windows（tags: `windows, x64`） | NSIS `.exe` / `.msi` → Release 附件 |
 | 发版 Release（客户端）→ `desktop-macos` | 自托管 macOS（tags: `macos, arm64`） | `.dmg` → Release 附件 |
 | 发布服务端镜像 → `server-image` | 云端 Linux | Docker 镜像 `v*` + `latest` |
-| `check` / main push | 云端 Linux | 类型检查 + 前端构建 |
+| 发版 Release（客户端）→ `desktop-linux` | 云端 Linux | DEB / RPM / AppImage → Release 附件 |
+| `check` / main push | 云端 Linux | 三端类型检查 + 前端构建 + 桌面测试 |
 
 桌面端两条流水线依赖根组织自托管构建机（云端节点仅 Linux，无法打包 Win/Mac）：
 按 [构建节点文档](https://docs.cnb.cool/zh/build/build-node.md) 接入后，节点需预装
@@ -193,30 +194,30 @@ WS 协议（JSON 文本帧）：
 
 > 零知识用法：**什么都别勾**即可——凭据只在连接那一刻经过服务端内存，用完即弃。
 
+## 插件与 Linux 使用
+
+侧边栏「插件管理」提供 9 个官方插件：SFTP、Snippets、日志回放、广播、AI、Quake、Triggers、主题市场、Zmodem/Sixel。全部默认不安装/不启用；安装时展示权限，启用后才出现入口。支持 `.tpk`、目录、开发目录热加载和自托管 HTTPS registry。第三方代码在隔离 Worker 中运行，不可访问密钥环或直接调用 Tauri。详情和开发示例见 [插件系统设计](./docs/插件系统设计.md)。
+
+```sh
+# 离线包示例
+npm run plugin:pack -- examples/hello-plugin target/plugins/org.example.hello-1.0.0.tpk
+# Linux Debian/Ubuntu 构建依赖（需要 root）
+bash tools/linux/dependencies.sh
+npm ci
+npm run tauri --workspace @termone/desktop -- build --bundles deb,rpm,appimage
+# 可复用容器环境；ARM64 主机本机构建 ARM64 包
+docker build -t termone-linux-build -f tools/linux/Dockerfile tools/linux
+# 自动化回归
+npm run check
+npm run test:desktop
+node tools/zmodem-smoke.mjs
+cargo test --workspace --release --locked
+```
+
+产物统一位于仓库根 `target/release/bundle`。Linux 运行需要系统 OpenSSH 客户端和桌面 Secret Service；Wayland 对全局热键的支持由桌面环境决定。可用绝对路径 `TERMONE_DATA_DIR` 指定桌面端独立数据目录（数据库、插件和日志），用于隔离测试；系统密钥环仍由 OS 管理。此变量与服务端 `TERMONE_DATA` 不同。
+
 ## Roadmap
 
-> 2026-10-23 修订：主窗口主打**轻量实用**，SFTP、AI 辅助等增值能力**全部改为插件按需安装**。
-> 详见 [`docs/需求.md`](./docs/需求.md) 与 [`docs/插件系统设计.md`](./docs/插件系统设计.md)。
+2026-10-24 已补齐 R-01～R-17、R-20 的本期实现，R-21 Web SSH 保留并回归验证。包含插件运行时与 9 个官方插件、分组拖动、最近会话、布局恢复、有限自动重连、E2EE 锁定保护和 Linux 打包。详见 [需求覆盖与验证记录](./docs/requirement-coverage.md)，其中明确列出尚缺的性能量测和跨设备验收证据。
 
-**进行中（Must）**
-- [ ] **插件运行时 + 插件管理（R-20）** —— 插件化战略的地基，前置项
-- [ ] SFTP 图形化文件管理 **以官方插件形态交付**（后端 6 个 IPC 命令已完成，UI 待迁移为插件）
-
-**已完成**
-- [x] 分屏 Split Panes
-- [x] SSH 端口转发 / JumpHost（`-L/-R/-D/-J`）
-- [x] 同步端到端加密（E2EE）
-- [x] 连接历史 / 最近会话
-- [x] 会话日志录制（回放待插件化）
-- [x] 连接分组 / 会话树
-- [x] SSH 自动重连 + 心跳保活
-- [x] 常用命令 Snippets（后端，UI 待插件化）
-
-**规划（均为插件形态，按需安装）**
-- [ ] 会话日志回放、广播输入、AI 命令辅助（默认关）、Quake 模式、Triggers 自动化、主题市场、Zmodem/Sixel
-- [ ] 插件市场与 `.tpk` 分发
-- [ ] Linux 支持（当前重点为 Windows / macOS）
-
-**明确不做**
-- 内置 SSH 协议栈（russh）—— 与「轻量」红线冲突，改为复用系统 `ssh` / `sftp`
-- 移动端、内置重型 IDE 功能
+R-18 移动端、R-19 内置重型 IDE 按需求不做；SSH/SFTP 继续复用系统 OpenSSH。公共 registry 服务未部署，客户端支持自托管索引和离线分发。

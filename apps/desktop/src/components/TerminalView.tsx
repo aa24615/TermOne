@@ -3,23 +3,14 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onSessionOutput, onSessionExit } from "../sessionEvents";
 import "@xterm/xterm/css/xterm.css";
 
 import { fromB64, ipc, toB64 } from "../ipc";
 import { useStore } from "../store";
 import { getTermTheme } from "../themes";
 import type { Pane } from "../types";
-
-interface OutputPayload {
-  id: string;
-  data: string;
-}
-
-interface ExitPayload {
-  id: string;
-  code: number | null;
-}
+import { registerTerminal } from "../plugin/terminalBridge";
 
 export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -27,6 +18,7 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
   const fitRef = useRef<FitAddon | null>(null);
 
   const theme = useStore((s) => s.settings.theme);
+  const customTheme = useStore(s => s.settings.customTheme);
   const fontFamily = useStore((s) => s.settings.fontFamily);
   const fontSize = useStore((s) => s.settings.fontSize);
 
@@ -58,10 +50,12 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
     }
 
     const sessionId = pane.sessionId;
+    const bridge = sessionId ? registerTerminal(sessionId, term) : null;
     const dataDisposer = term.onData((d) => {
       // 输入任意内容（含回车）时清除意外触发/残留的文本选区
       if (term.hasSelection()) term.clearSelection();
-      if (sessionId) void ipc.sessionWrite(sessionId, toB64(d)).catch(() => {});
+      const input = bridge ? bridge.input(d) : d;
+      if (sessionId && input !== null) void ipc.sessionWrite(sessionId, toB64(input)).catch(() => {});
     });
     // Esc 清除选区（其次才作为普通按键发给 Shell）
     term.attachCustomKeyEventHandler((ev) => {
@@ -78,8 +72,8 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
       void ipc.sessionResize(sessionId, term.cols, term.rows).catch(() => {});
     }
 
-    let unOutput: UnlistenFn | undefined;
-    let unExit: UnlistenFn | undefined;
+    let unOutput: (() => void) | undefined;
+    let unExit: (() => void) | undefined;
     // 输出合批：高频输出时合并 12ms 窗口内的数据块一次写入，
     // 避免每块都触发事件分发 + 渲染调度冲卡主线程
     let pendingChunks: Uint8Array[] = [];
@@ -95,23 +89,20 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
         offset += chunk.length;
       }
       pendingChunks = [];
-      term.write(merged);
+      const output = bridge ? bridge.output(merged) : merged;
+      if (output) term.write(output);
     };
-    void listen<OutputPayload>("session:output", (e) => {
-      if (e.payload.id !== sessionId) return;
-      pendingChunks.push(fromB64(e.payload.data));
-      if (flushTimer === null) flushTimer = setTimeout(flushPending, 12);
-    }).then((fn) => {
-      unOutput = fn;
-    });
-    void listen<ExitPayload>("session:exit", (e) => {
-      if (e.payload.id === sessionId) {
+    if (sessionId) {
+      unOutput = onSessionOutput(sessionId, data => {
+        pendingChunks.push(fromB64(data));
+        if (flushTimer === null) flushTimer = setTimeout(flushPending, 12);
+      });
+      unExit = onSessionExit(sessionId, code => {
+        if (pendingChunks.length > 0) flushPending();
         term.write("\r\n\x1b[2m── 会话已结束 ──\x1b[0m\r\n");
-        useStore.getState().markSessionExit(sessionId, e.payload.code);
-      }
-    }).then((fn) => {
-      unExit = fn;
-    });
+        useStore.getState().markSessionExit(sessionId, code);
+      });
+    }
 
     let fitScheduled = false;
     const scheduleFit = () => {
@@ -131,6 +122,7 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
     ro.observe(host);
 
     return () => {
+      bridge?.dispose();
       dataDisposer.dispose();
       resizeDisposer.dispose();
       ro.disconnect();
@@ -156,7 +148,7 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
     } catch {
       // 忽略
     }
-  }, [theme, fontFamily, fontSize]);
+  }, [theme, customTheme, fontFamily, fontSize]);
 
   useEffect(() => {
     if (!active) return;

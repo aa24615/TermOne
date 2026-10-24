@@ -30,6 +30,8 @@ main:
           script: |
             npm run check
             npm run build:desktop
+            npm run build:web
+            npm run test:desktop
 
   web_trigger_release:
     - name: create-tag
@@ -74,6 +76,24 @@ main:
         - name: build bundles
           script: npm run tauri build
         - name: upload to release
+          script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs target/release/bundle
+
+    - name: desktop-linux
+      docker:
+        image: node:24-bookworm
+      stages:
+        - name: Linux build dependencies
+          script: bash tools/linux/setup.sh
+        - name: Linux bundles and tests
+          script: |
+            export PATH="/root/.cargo/bin:$PATH"
+            export CARGO_HTTP_MULTIPLEXING=false
+            npm ci --no-audit --no-fund
+            npm run check
+            npm run test:desktop
+            npm run tauri --workspace @termone/desktop -- build --bundles deb,rpm,appimage
+            cargo test --workspace --release --locked
+        - name: upload Linux bundles
           script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs target/release/bundle
 
   web_trigger_server_image:

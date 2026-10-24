@@ -39,8 +39,22 @@
     ],
     "windows": {
       "nsis": {
-        "languages": ["SimpChinese"],
+        "languages": [
+          "SimpChinese"
+        ],
         "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "openssh-client"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "openssh-clients"
+        ]
       }
     }
   }

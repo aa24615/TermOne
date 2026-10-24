@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, TermError};
 
 pub fn default_db_path() -> PathBuf {
+    if let Some(dir) = std::env::var_os("TERMONE_DATA_DIR").map(PathBuf::from).filter(|p| p.is_absolute()) {
+        return dir.join("termone.db");
+    }
     dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("termone")
@@ -860,6 +863,16 @@ impl Db {
     // ---------------- sync ----------------
 
     /// 导出所有待推送（dirty）的变更。
+    /// Re-encrypt/decrypt the complete local snapshot when encryption mode changes.
+    pub fn sync_requeue_all(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(TermError::Db)?;
+        for table in ["profiles", "groups", "snippets", "settings", "plugins"] {
+            tx.execute(&format!("UPDATE {table} SET dirty = 1, updated_at = MAX(updated_at + 1, ?1)"), params![now_ms()]).map_err(TermError::Db)?;
+        }
+        tx.commit().map_err(TermError::Db)
+    }
+
     pub fn sync_export_dirty(&self) -> Result<Vec<SyncItem>> {
         let conn = self.conn.lock().unwrap();
         let mut items = Vec::new();
@@ -922,7 +935,7 @@ impl Db {
         }
         {
             let mut stmt = conn
-                .prepare("SELECT key, value, updated_at FROM settings WHERE dirty = 1")
+                .prepare("SELECT key, value, updated_at FROM settings WHERE dirty = 1 AND key != 'e2eeEnabled'")
                 .map_err(TermError::Db)?;
             let rows = stmt
                 .query_map([], |row| {
@@ -1153,6 +1166,8 @@ impl Db {
                     let Some(key) = item.key.clone() else {
                         continue;
                     };
+                    // Encryption policy is a device-local security decision, never controlled by sync.
+                    if key == "e2eeEnabled" { continue; }
                     let local_updated: Option<i64> = conn
                         .query_row(
                             "SELECT updated_at FROM settings WHERE key = ?1",
@@ -1541,6 +1556,27 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encryption_mode_change_requeues_clean_records_and_bumps_versions() {
+        let db=Db::open_at(":memory:".into()).unwrap();
+        db.setting_set("theme","midnight").unwrap();
+        let first=db.sync_export_dirty().unwrap();
+        db.sync_mark_pushed(&first).unwrap();
+        assert!(db.sync_export_dirty().unwrap().is_empty());
+        db.sync_requeue_all().unwrap();
+        let again=db.sync_export_dirty().unwrap();
+        assert_eq!(again.len(),first.len());
+        assert!(again[0].updated_at>first[0].updated_at);
+    }
+
+    #[test]
+    fn sync_cannot_disable_local_encryption_policy() {
+        let db=Db::open_at(":memory:".into()).unwrap();db.setting_set("e2eeEnabled","1").unwrap();
+        assert!(db.sync_export_dirty().unwrap().iter().all(|i|i.key.as_deref()!=Some("e2eeEnabled")));
+        db.sync_apply_pull(&[SyncItem{item_id:"e2eeEnabled".into(),kind:"setting".into(),key:Some("e2eeEnabled".into()),data:"0".into(),updated_at:i64::MAX,deleted:false}]).unwrap();
+        assert_eq!(db.setting_get("e2eeEnabled").unwrap().as_deref(),Some("1"));
+    }
 
     fn tmp_db() -> Db {
         let path = std::env::temp_dir().join(format!("termone-test-{}.db", uuid::Uuid::new_v4()));

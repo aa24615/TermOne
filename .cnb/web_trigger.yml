@@ -5,7 +5,7 @@ branch:
   - reg: ^main$
     buttons:
       - name: 发版 Release（客户端）
-        description: 打包 Windows/macOS 安装包并发布 Release（自动打 v* 标签）
+        description: 打包 Windows/macOS/Linux 安装包并发布 Release（自动打 v* 标签）
         event: web_trigger_release
         inputs:
           VERSION:

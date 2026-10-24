@@ -1,0 +1,11 @@
+{
+  "id": "org.example.hello",
+  "name": "Hello 插件示例",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "hostApi": { "major": 1, "minor": 0, "patch": 0 },
+  "author": "Example",
+  "description": "隔离 Worker 插件示例：输入文字并显示通知",
+  "permissions": [{ "type": "ui-panel" }, { "type": "ui-toast" }],
+  "files": ["index.js"]
+}
