@@ -23,11 +23,13 @@
 - **R-17 Triggers**：连接/输出文字匹配，通知或固定命令，冷却/每会话单次，命令动作须确认布防。
 - **R-21 Web SSH**：保持原有共享主机库、凭据默认不上云、JWT/TOFU/E2EE 降级；本期运行既有两组服务端冒烟。
 
+**R-26 命令安全分类器（核心逻辑）**：新增 `crates/term-core/src/safety.rs`，纯逻辑、零依赖实现 `classify_command`——多行粘贴检测（按换行计有效语句数）+ 危险命令识别（递归删除 `rm -r/-R`、分区工具 `mkfs/fdisk/parted`、直接写盘 `dd`、fork 炸弹、设备重定向 `> /dev/`、关机 `shutdown/reboot/halt/init`、下载喂 shell `curl|sh`、破坏性 `git reset --hard/clean/push --force`、权限清零递归 `chmod 0.../-R`），区分 `Safe/Caution/Danger` 三级与 10 类 `RiskReason`，去注释与引号字面量防误报；**31 项 P0–P5 单元测试**覆盖正常路径、核心危险、边界、组合前缀、防误报与极端回归。UI 接线（粘贴拦截调用分类器弹二次确认）待补。
+
 **R-18 移动端、R-19 重型 IDE 按需求 Won’t 保留不做。**
 
 ## 自动化证据
 
-- `cargo test --workspace --release --locked`：**52 项 term-core + 4 项原生命令测试通过**。涵盖存储/LWW/备份、分组/最近/Snippets、重连策略、manifest/ZIP 路径/权限/密钥环拒绝、官方 catalog、目录 symlink 拒绝、E2EE 本机策略不被同步覆盖。
+- `cargo test --workspace --release --locked`：**83 项 term-core + 4 项原生命令测试通过**（本期新增 R-26 安全分类器 31 项 P0–P5 用例）。涵盖存储/LWW/备份、分组/最近/Snippets、重连策略、命令安全分类（多行粘贴 + 危险命令）、manifest/ZIP 路径/权限/密钥环拒绝、官方 catalog、目录 symlink 拒绝、E2EE 本机策略不被同步覆盖。
 - `npm run check`：桌面端、服务端、Web 三个工作区 TypeScript 通过。
 - `npm run test:desktop`：**14 项通过**。真实 Web Crypto 随机化、中文、错误口令、篡改；锁定/解密失败不推送不推进游标；密文同步；ZIP/HTTPS/digest；资源撤销与确认框取消；第三方本地写入拒绝；重连次数；布局不含会话 ID；拉取期间切换账号不应用/不推送原账号数据；正常退出不重连、传输失败可停止；欢迎页分屏可保存。
 - `node tools/zmodem-smoke.mjs`：**1 MiB 全字节二进制 offer/accept/send/receive/close 回环及内容一致性通过**。据此修复库 `accept()` 返回值使用错误。

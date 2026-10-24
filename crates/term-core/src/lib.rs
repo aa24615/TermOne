@@ -3,6 +3,7 @@
 pub mod error;
 pub mod plugin;
 pub mod reconnect;
+pub mod safety;
 pub mod secrets;
 pub mod session;
 pub mod storage;
@@ -13,6 +14,7 @@ pub use plugin::{
     PluginPermission, PluginState,
 };
 pub use reconnect::{KeepAlivePolicy, ReconnectPolicy};
+pub use safety::{CommandCheck, RiskLevel, RiskReason};
 pub use session::{
     default_shell, list_ports, list_shells, ExitSink, OutputSink, PortInfo, SftpAuth, SftpEntry,
     SftpRequest, ShellInfo, SessionId, SessionInfo, SessionKind, SessionManager,
