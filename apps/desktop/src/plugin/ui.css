@@ -111,3 +111,74 @@
   color: var(--danger);
   overflow-wrap: anywhere;
 }
+
+.plugin-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.plugin-list-heading small {
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+.plugin-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 12px;
+}
+.plugin-list-info {
+  min-width: 0;
+}
+.plugin-list-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.plugin-list-info p {
+  margin: 4px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+}
+.plugin-list-info details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.plugin-list-info summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+}
+.plugin-row-actions {
+  margin: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.plugin-row-actions .btn {
+  white-space: nowrap;
+  min-width: 56px;
+}
+.plugin-state {
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: var(--bg-input);
+}
+.plugin-state.enabled {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+@media (max-width: 620px) {
+  .plugin-list-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .plugin-row-actions {
+    justify-content: flex-start;
+  }
+}

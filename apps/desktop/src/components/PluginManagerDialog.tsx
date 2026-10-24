@@ -16,7 +16,7 @@ import {
   uninstallPlugin,
   usePlugins,
 } from "../plugin/runtime";
-import type { Manifest } from "../plugin/types";
+import type { Installed, Manifest } from "../plugin/types";
 import { useStore } from "../store";
 import { confirm, Modal } from "./Dialog";
 import "../plugin/ui.css";
@@ -99,6 +99,82 @@ export default function PluginManagerDialog() {
     stopPlugin(pkg.manifest.id);
     await invoke("plugin_install", { ...pkg, source: "market", devPath: null });
   };
+  const installBuiltin = async (m: Manifest) => {
+    if (!(await approve(m))) return;
+    stopPlugin(m.id);
+    await invoke("plugin_install", {
+      manifest: m,
+      files: {},
+      source: "builtin",
+      devPath: null,
+    });
+  };
+  const actions = (
+    p?: Installed,
+    install?: () => Promise<void>,
+    installLabel = "已安装",
+    current = false,
+  ) => (
+    <div className="plugin-actions plugin-row-actions">
+      <button
+        className="btn"
+        disabled={busy || !install || current}
+        onClick={() => install && void run(install)}
+      >
+        {installLabel}
+      </button>
+      <button
+        className="btn"
+        disabled={busy || !p}
+        title={!p ? "请先安装插件" : undefined}
+        onClick={() => p && void run(() => togglePlugin(p))}
+      >
+        {p?.enabled ? "停用" : "启用"}
+      </button>
+      {p?.enabled && (
+        <button
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            useStore.getState().setDialog(null);
+            void openPlugin(p.id);
+          }}
+        >
+          打开
+        </button>
+      )}
+      {p && (
+        <button
+          className="btn danger"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              if (
+                await confirm({
+                  title: "卸载插件",
+                  message:
+                    "将清除 " + p.manifest.name + " 的私有数据，确认卸载？",
+                })
+              )
+                await uninstallPlugin(p.id);
+            })
+          }
+        >
+          卸载
+        </button>
+      )}
+    </div>
+  );
+  const rows = [
+    ...catalog.map((m) => ({
+      manifest: m as Manifest,
+      existing: installed.find((p) => p.id === m.id),
+      official: true,
+    })),
+    ...installed
+      .filter((p) => !catalog.some((m) => m.id === p.id))
+      .map((p) => ({ manifest: p.manifest, existing: p, official: false })),
+  ];
   return (
     <Modal
       title="插件管理"
@@ -144,7 +220,70 @@ export default function PluginManagerDialog() {
           {error}
         </p>
       )}
-      <h3>已安装</h3>
+      <h3 className="plugin-list-heading">
+        插件列表{" "}
+        <small>
+          已安装 {installed.length} · 已启用{" "}
+          {installed.filter((p) => p.enabled).length}
+        </small>
+      </h3>
+      <div className="plugin-list">
+        {rows.map(({ manifest: m, existing: p, official }) => {
+          const shown = p?.manifest ?? m;
+          const current =
+            p?.source === "builtin" && p.manifest.version === m.version;
+          return (
+            <section
+              className="plugin-card plugin-list-row"
+              key={m.id}
+              aria-label={shown.name}
+            >
+              <div className="plugin-list-info">
+                <div className="plugin-list-title">
+                  <strong>{shown.name}</strong>
+                  <small>
+                    {shown.version} ·{" "}
+                    {p
+                      ? p.source === "builtin"
+                        ? "随包官方版"
+                        : p.source
+                      : "官方插件"}
+                  </small>
+                  <span
+                    className={`plugin-state${p?.enabled ? " enabled" : ""}`}
+                  >
+                    {p ? (p.enabled ? "已启用" : "未启用") : "未安装"}
+                  </span>
+                </div>
+                <p title={shown.description}>{shown.description}</p>
+                <details>
+                  <summary>权限</summary>
+                  <pre>
+                    {shown.permissions
+                      .map((permission) => describePermission(permission))
+                      .join("\n")}
+                  </pre>
+                </details>
+              </div>
+              {actions(
+                p,
+                official ? () => installBuiltin(m) : undefined,
+                official
+                  ? !p
+                    ? "安装"
+                    : current
+                      ? "已安装"
+                      : "更新官方版"
+                  : "已安装",
+                current,
+              )}
+            </section>
+          );
+        })}
+      </div>
+      {Object.values(contributions).some((item) => item.kind === "setting") && (
+        <h3>插件设置</h3>
+      )}
       {Object.entries(contributions)
         .filter(([, item]) => item.kind === "setting")
         .map(([key, item]) => (
@@ -153,68 +292,6 @@ export default function PluginManagerDialog() {
             <ContributionView render={item.render} />
           </PluginBoundary>
         ))}
-      {installed.length === 0 && (
-        <p className="muted">暂无插件。可从下方选择官方插件。</p>
-      )}
-      {installed.map((p) => (
-        <section className="plugin-card" key={p.id}>
-          <strong>{p.manifest.name}</strong>{" "}
-          <small>
-            {p.manifest.version} ·{" "}
-            {p.source === "builtin" ? "随包官方版" : p.source}
-          </small>
-          <p>{p.manifest.description}</p>
-          <details>
-            <summary>权限</summary>
-            <pre>
-              {p.manifest.permissions
-                .map((p) =>
-                  [p.type, p.command ?? p.domain].filter(Boolean).join(": "),
-                )
-                .join("\n")}
-            </pre>
-          </details>
-          <div className="plugin-actions">
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() => void run(() => togglePlugin(p))}
-            >
-              {p.enabled ? "停用" : "启用"}
-            </button>
-            {p.enabled && (
-              <button
-                className="btn"
-                onClick={() => {
-                  useStore.getState().setDialog(null);
-                  void openPlugin(p.id);
-                }}
-              >
-                打开
-              </button>
-            )}
-            <button
-              className="btn danger"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  if (
-                    await confirm({
-                      title: "卸载插件",
-                      message:
-                        "将清除 " + p.manifest.name + " 的私有数据，确认卸载？",
-                    })
-                  )
-                    await uninstallPlugin(p.id);
-                })
-              }
-            >
-              卸载
-            </button>
-          </div>
-        </section>
-      ))}
-      <h3>官方插件</h3>
       <details>
         <summary>为已安装插件添加联网域名</summary>
         <p>只填写准确域名，不含协议和路径。添加后插件会停用，需要重新启用。</p>
@@ -250,37 +327,6 @@ export default function PluginManagerDialog() {
           </button>
         ))}
       </details>
-      {catalog.map((m) => {
-        const existing = installed.find((p) => p.id === m.id);
-        return (
-          <section className="plugin-card" key={m.id}>
-            <strong>{m.name}</strong>
-            <p>{m.description}</p>
-            <button
-              className="btn"
-              disabled={
-                busy ||
-                (existing?.source === "builtin" &&
-                  existing.manifest.version === m.version)
-              }
-              onClick={() =>
-                void run(async () => {
-                  if (!(await approve(m as Manifest))) return;
-                  stopPlugin(m.id);
-                  await invoke("plugin_install", {
-                    manifest: m,
-                    files: {},
-                    source: "builtin",
-                    devPath: null,
-                  });
-                })
-              }
-            >
-              {existing ? "更新官方版" : "安装"}
-            </button>
-          </section>
-        );
-      })}
       <h3>自托管插件仓库</h3>
       <p className="muted">
         仓库索引包含
@@ -326,18 +372,24 @@ export default function PluginManagerDialog() {
           检查更新
         </button>
       </div>
-      {market.map((entry) => (
-        <section className="plugin-card" key={entry.id}>
-          <strong>{entry.name}</strong> {entry.version}
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() => void run(() => fromMarket(entry))}
+      {market.map((entry) => {
+        const p = installed.find((p) => p.id === entry.id);
+        return (
+          <section
+            className="plugin-card plugin-list-row"
+            key={entry.id}
+            aria-label={entry.name}
           >
-            {installed.some((p) => p.id === entry.id) ? "更新 / 重装" : "安装"}
-          </button>
-        </section>
-      ))}
+            <div className="plugin-list-info">
+              <div className="plugin-list-title">
+                <strong>{entry.name}</strong>
+                <small>{entry.version}</small>
+              </div>
+            </div>
+            {actions(p, () => fromMarket(entry), p ? "更新 / 重装" : "安装")}
+          </section>
+        );
+      })}
       {audit.length > 0 && (
         <>
           <h3>最近权限调用</h3>
