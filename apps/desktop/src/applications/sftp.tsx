@@ -1,3 +1,4 @@
+import { Dropdown } from "../components/Dropdown";
 import { useEffect, useState } from "react";
 import type { Host } from "../plugin/types";
 import type { SftpEntry, LocalEntry } from "../types";
@@ -113,22 +114,18 @@ export default function Sftp({ host }: { host: Host }) {
     <div className="plugin-stack">
       <label>
         SSH 档案
-        <select
-          value={profileId}
-          onChange={(e) => {
-            setProfile(e.target.value);
+        <Dropdown
+          ariaLabel="SSH 档案" value={profileId}
+          onChange={(value) => {
+            setProfile(value);
             setRemote("");
             setRemoteRows([]);
             setSelection(null);
           }}
-        >
-          <option value="">请选择</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          options={[{ value: "", label: "请选择 SSH 档案" }, ...profiles.map((profile) => ({
+            value: profile.id, label: profile.name,
+          }))]}
+        />
       </label>
       <p className="muted">
         使用系统 ssh-agent

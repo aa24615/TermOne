@@ -1,3 +1,4 @@
+import { Dropdown } from "../components/Dropdown";
 import { useEffect, useState } from "react";
 import "./ui.css";
 import type { Host, Session } from "./types";
@@ -22,14 +23,12 @@ export function SessionPicker({
   return (
     <label>
       目标会话
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">请选择会话</option>
-        {sessions.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.title} · {s.id.slice(0, 6)}
-          </option>
-        ))}
-      </select>
+      <Dropdown
+        ariaLabel="目标会话" value={value} onChange={onChange}
+        options={[{ value: "", label: "请选择会话" }, ...sessions.map((session) => ({
+          value: session.id, label: `${session.title} · ${session.id.slice(0, 6)}`,
+        }))]}
+      />
     </label>
   );
 }

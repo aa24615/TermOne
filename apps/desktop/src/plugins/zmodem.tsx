@@ -1,3 +1,4 @@
+import { Dropdown } from "../components/Dropdown";
 import { useEffect, useState } from "react";
 import { ImageAddon } from "@xterm/addon-image";
 import Zmodem, { type Session as ZSession, type Detection } from "zmodem.js";
@@ -156,15 +157,13 @@ export default function ZmodemPanel({ host }: { host: Host }) {
         接收、<code>rz</code> 后选文件发送。每次传输需要确认，单文件上限 64
         MiB。
       </p>
-      <select value={target} onChange={(e) => setTarget(e.target.value)}>
-        <option value="">选择传输会话</option>
-        {[...entries.entries()].map(([id, p]) => (
-          <option key={id} value={id}>
-            {host.sessions().find((s) => s.id === id)?.title ?? id.slice(0, 8)}{" "}
-            · {p.status}
-          </option>
-        ))}
-      </select>
+      <Dropdown
+        ariaLabel="传输会话" value={target} onChange={setTarget}
+        options={[{ value: "", label: "选择传输会话" }, ...[...entries.entries()].map(([id, protocol]) => ({
+          value: id,
+          label: `${host.sessions().find((session) => session.id === id)?.title ?? id.slice(0, 8)} · ${protocol.status}`,
+        }))]}
+      />
       <label>
         发送文件
         <input

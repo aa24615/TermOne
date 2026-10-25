@@ -1,3 +1,4 @@
+import { Dropdown } from "../components/Dropdown";
 import { useEffect, useState } from "react";
 import type { Host } from "../plugin/types";
 import { downloadText, report } from "../plugin/shared";
@@ -22,25 +23,18 @@ export default function SessionLog({ host }: { host: Host }) {
         在核心设置中开启「记录会话日志」后，新会话输出才会录制。日志仅保存在本机。
       </p>
       <div className="plugin-actions">
-        <select
-          value={id}
-          onChange={(e) => {
-            setId(e.target.value);
-            report(host, async () =>
-              setText(
-                await host.invoke("session_log_read", { id: e.target.value }),
-              ),
-            );
+        <Dropdown
+          ariaLabel="录制会话" value={id}
+          onChange={(value) => {
+            setId(value);
+            if (!value) { setText(""); return; }
+            report(host, async () => setText(await host.invoke("session_log_read", { id: value })));
           }}
-        >
-          <option value="">选择录制会话</option>
-          {logs.map((l) => (
-            <option key={l.id} value={l.id}>
-              {new Date(l.modified).toLocaleString()} · {l.id.slice(0, 8)} ·{" "}
-              {l.size} B
-            </option>
-          ))}
-        </select>
+          options={[{ value: "", label: "选择录制会话" }, ...logs.map((log) => ({
+            value: log.id,
+            label: `${new Date(log.modified).toLocaleString()} · ${log.id.slice(0, 8)} · ${log.size} B`,
+          }))]}
+        />
         <button className="btn" onClick={() => report(host, reload)}>
           刷新
         </button>

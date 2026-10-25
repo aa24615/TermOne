@@ -32,6 +32,8 @@
   flex: 1;
   min-width: 160px;
 }
+.plugin-stack .dropdown { width: 100%; }
+.plugin-actions > .dropdown { flex: 1; min-width: 180px; max-width: 100%; }
 .plugin-card {
   border: 1px solid var(--border);
   border-radius: 8px;

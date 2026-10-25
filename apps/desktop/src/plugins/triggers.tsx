@@ -1,3 +1,4 @@
+import { Dropdown } from "../components/Dropdown";
 import { useState } from "react";
 import type { Host, Session } from "../plugin/types";
 import { report } from "../plugin/shared";
@@ -90,13 +91,11 @@ export default function Triggers({ host }: { host: Host }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <select
-        value={event}
-        onChange={(e) => setEvent(e.target.value as Rule["event"])}
-      >
-        <option value="output">输出包含文字</option>
-        <option value="connect">新建会话</option>
-      </select>
+      <Dropdown
+        ariaLabel="触发条件" value={event}
+        onChange={(value) => setEvent(value as Rule["event"])}
+        options={[{ value: "output", label: "输出包含文字" }, { value: "connect", label: "新建会话" }]}
+      />
       {event === "output" && (
         <input
           placeholder="匹配文字"
