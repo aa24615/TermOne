@@ -14,7 +14,7 @@
     "dev:web": "npm run dev --workspace @termone/web",
     "build:desktop": "npm run build --workspace @termone/desktop",
     "build:web": "npm run build --workspace @termone/web",
-    "test:desktop": "node --import tsx --test tools/desktop.test.mjs",
+    "test:desktop": "node --import tsx --test tools/desktop.test.mjs tools/input-guard.test.mjs",
     "plugin:pack": "node --import tsx tools/package-plugin.mjs",
     "check": "npm run check --workspace @termone/desktop && npm run check --workspace @termone/server && npm run check --workspace @termone/web",
     "tauri": "npm run tauri --workspace @termone/desktop"

@@ -10,15 +10,23 @@ import { fromB64, ipc, toB64 } from "../ipc";
 import { useStore } from "../store";
 import { getTermTheme } from "../themes";
 import type { Pane } from "../types";
+import { TerminalInputGuard, RISK_REASONS } from "../terminalInputGuard";
+import { confirm } from "./Dialog";
 import { registerTerminal } from "../plugin/terminalBridge";
 
-export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) {
+export function TerminalView({
+  pane,
+  active,
+}: {
+  pane: Pane;
+  active: boolean;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
 
   const theme = useStore((s) => s.settings.theme);
-  const customTheme = useStore(s => s.settings.customTheme);
+  const customTheme = useStore((s) => s.settings.customTheme);
   const fontFamily = useStore((s) => s.settings.fontFamily);
   const fontSize = useStore((s) => s.settings.fontSize);
 
@@ -51,11 +59,60 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
 
     const sessionId = pane.sessionId;
     const bridge = sessionId ? registerTerminal(sessionId, term) : null;
-    const dataDisposer = term.onData((d) => {
-      // 输入任意内容（含回车）时清除意外触发/残留的文本选区
+    const guard = new TerminalInputGuard({
+      check: ipc.commandCheck,
+      confirm: (check, text, signal) =>
+        confirm(
+          {
+            title: check.risk === "danger" ? "危险命令确认" : "终端输入确认",
+            confirmText: check.risk === "danger" ? "仍然发送" : "确认发送",
+            message:
+              "目标：" +
+              (pane.title || pane.sessionTitle || "当前终端") +
+              "\n\n" +
+              check.reasons.map((r) => RISK_REASONS[r] ?? r).join("\n") +
+              "\n\n待发送内容：\n" +
+              text.slice(0, 8192) +
+              (text.length > 8192
+                ? "\n…（预览已截断，检查覆盖全部内容）"
+                : "") +
+              "\n\n确认后才会发送；取消保留已输入内容。",
+          },
+          signal,
+        ),
+      send: (data) => {
+        const input = bridge ? bridge.input(data) : data;
+        if (sessionId && input !== null)
+          void ipc
+            .sessionWrite(sessionId, toB64(input))
+            .catch((e) => useStore.getState().showToast(String(e), "error"));
+      },
+      paste: (text) => term.paste(text),
+      visibleLine: () => {
+        const buffer = term.buffer.active;
+        let at = buffer.baseY + buffer.cursorY;
+        let text = buffer.getLine(at)?.translateToString(true) ?? "";
+        for (let n = 0; n < 8 && at > 0 && buffer.getLine(at)?.isWrapped; n++) {
+          at--;
+          text = (buffer.getLine(at)?.translateToString(true) ?? "") + text;
+        }
+        return text;
+      },
+      error: (message) => useStore.getState().showToast(message, "error"),
+      focus: () => {
+        if (useStore.getState().activePaneId === pane.id) term.focus();
+      },
+    });
+    const onPaste = (event: ClipboardEvent) => {
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      guard.paste(event.clipboardData.getData("text/plain"));
+    };
+    host.addEventListener("paste", onPaste, true);
+    const dataDisposer = term.onData((data) => {
       if (term.hasSelection()) term.clearSelection();
-      const input = bridge ? bridge.input(d) : d;
-      if (sessionId && input !== null) void ipc.sessionWrite(sessionId, toB64(input)).catch(() => {});
+      guard.input(data);
     });
     // Esc 清除选区（其次才作为普通按键发给 Shell）
     term.attachCustomKeyEventHandler((ev) => {
@@ -66,7 +123,8 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
       return true;
     });
     const resizeDisposer = term.onResize(({ cols, rows }) => {
-      if (sessionId) void ipc.sessionResize(sessionId, cols, rows).catch(() => {});
+      if (sessionId)
+        void ipc.sessionResize(sessionId, cols, rows).catch(() => {});
     });
     if (sessionId) {
       void ipc.sessionResize(sessionId, term.cols, term.rows).catch(() => {});
@@ -93,12 +151,13 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
       if (output) term.write(output);
     };
     if (sessionId) {
-      unOutput = onSessionOutput(sessionId, data => {
+      unOutput = onSessionOutput(sessionId, (data) => {
         pendingChunks.push(fromB64(data));
         if (flushTimer === null) flushTimer = setTimeout(flushPending, 12);
       });
-      unExit = onSessionExit(sessionId, code => {
+      unExit = onSessionExit(sessionId, (code) => {
         if (pendingChunks.length > 0) flushPending();
+        guard.dispose();
         term.write("\r\n\x1b[2m── 会话已结束 ──\x1b[0m\r\n");
         useStore.getState().markSessionExit(sessionId, code);
       });
@@ -122,6 +181,8 @@ export function TerminalView({ pane, active }: { pane: Pane; active: boolean }) 
     ro.observe(host);
 
     return () => {
+      guard.dispose();
+      host.removeEventListener("paste", onPaste, true);
       bridge?.dispose();
       dataDisposer.dispose();
       resizeDisposer.dispose();

@@ -34,6 +34,7 @@ export function fromB64(b64: string): Uint8Array {
 }
 
 export const ipc = {
+  commandCheck: (input: string) => invoke<import("./terminalInputGuard").CommandCheck>("command_check", { input }),
   appInfo: () => invoke<AppInfoDto>("app_info"),
   defaultShell: () => invoke<string>("default_shell"),
   serialPorts: () => invoke<SerialPortDto[]>("serial_list_ports"),

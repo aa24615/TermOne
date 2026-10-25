@@ -38,6 +38,7 @@ interface Question {
   message: string;
   input?: boolean;
   value?: string;
+  confirmText?: string;
   resolve: (value: string | boolean | null) => void;
 }
 const useQuestions = create<{ queue: Question[] }>(() => ({ queue: [] }));
@@ -64,7 +65,7 @@ function ask(opts: Omit<Question, "resolve" | "id">, signal?: AbortSignal) {
   });
 }
 export async function confirm(
-  opts: { title: string; message: string },
+  opts: { title: string; message: string; confirmText?: string },
   signal?: AbortSignal,
 ): Promise<boolean> {
   return (await ask(opts, signal)) === true;
@@ -106,7 +107,7 @@ function QuestionDialog({ question: q }: { question: Question }) {
           className="btn primary"
           onClick={() => done(q.input ? value : true)}
         >
-          确认
+          {q.confirmText ?? "确认"}
         </button>
       </div>
     </Modal>

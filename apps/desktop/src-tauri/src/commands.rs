@@ -432,3 +432,19 @@ pub async fn backup_import(
         .backup_import(std::path::Path::new(&path), replace)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn command_check(input: String) -> CmdResult<term_core::CommandCheck> {
+    if input.len() > 1024 * 1024 { return Err("一次输入最多支持 1 MiB 文本".into()); }
+    Ok(term_core::safety::classify_command(&input))
+}
+
+#[cfg(test)]
+mod input_safety_tests {
+    #[test]
+    fn command_check_rejects_oversized_input_and_classifies_without_execution() {
+        assert!(super::command_check("x".repeat(1024 * 1024 + 1)).is_err());
+        let check = super::command_check("rm -rf /tmp/termone-never-executed".into()).unwrap();
+        assert_eq!(check.risk, term_core::RiskLevel::Danger);
+    }
+}

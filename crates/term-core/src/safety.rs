@@ -4,16 +4,19 @@
 //! 复用。对应需求 **R-26（多行粘贴保护 + 危险命令二次确认）**。
 //!
 //! 设计原则：
-//! - **保守优先**：宁可少报不可漏报高危命令；误报只会多一次确认，漏报则可能误删。
-//! - **不解析完整 shell 语法**：仅做「去注释 + 去引号字面量 + 关键字 / 子串扫描」，足以覆盖绝大多数误操作。
+//! - **保守提示**：对可识别的高风险模式要求确认，不能代替完整 shell 语义或权限隔离。
+//! - **不解析完整 shell 语法**：保留引号词、识别常见命令替换和 shell 包装；变量展开、别名和远端状态仍有边界。
 //! - **跨平台一致**：不依赖具体 shell，规则对 bash / zsh / sh 均适用。
 //!
 //! 已知边界（保守策略的代价，均为「多一次确认」而非漏报）：
 //! - 单行内以 `;` / `&&` / `||` 串联的多条命令不算「多行粘贴」（多行仅按换行判定，贴合 R-26 语义）。
 //! - 针对分区工具的匹配为词首匹配，正常文本中若恰好出现 `mkfs` / `fdisk` 等词仍会提示，属可接受误报。
 
+use serde::Serialize;
+
 /// 风险等级（由低到高）。UI 据此决定弹窗强度与文案。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RiskLevel {
     /// 单条、无风险命令
     Safe = 0,
@@ -24,7 +27,8 @@ pub enum RiskLevel {
 }
 
 /// 触发风险的具体原因，UI 可据此给出针对性文案与审计记录。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RiskReason {
     /// 多行粘贴（可能误执行多条命令）
     MultiLinePaste,
@@ -49,7 +53,8 @@ pub enum RiskReason {
 }
 
 /// 单条输入（一次粘贴 / 一次回车提交）的检查结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandCheck {
     /// 去注释 / 去引号后，非空的有效语句数（按换行计）
     pub statement_count: usize,
@@ -73,177 +78,298 @@ impl CommandCheck {
 /// `input` 为终端输入框的当前内容（可能含多行，例如一次粘贴）。
 /// 返回的风险等级与原因可直接驱动 UI 的二次确认弹窗。
 pub fn classify_command(input: &str) -> CommandCheck {
-    let mut reasons: Vec<RiskReason> = Vec::new();
-    let mut statement_count = 0usize;
+    classify(input, 0)
+}
 
-    for raw_line in input.split('\n') {
-        let normalized = normalize_line(raw_line);
-        let trimmed = normalized.trim();
-        if trimmed.is_empty() {
-            continue;
+fn classify(input: &str, depth: usize) -> CommandCheck {
+    let input = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut reasons = Vec::new();
+    let statement_count = input
+        .lines()
+        .filter(|line| {
+            shell_tokens(line)
+                .iter()
+                .any(|t| ![";", "|", "&"].contains(&t.as_str()))
+        })
+        .count();
+    collect_danger(&input, &mut reasons);
+    if depth < 8 {
+        for nested in substitutions(&input) {
+            for reason in classify(&nested, depth + 1).reasons {
+                if reason != RiskReason::MultiLinePaste {
+                    reasons.push(reason);
+                }
+            }
         }
-        statement_count += 1;
-        let low = trimmed.to_ascii_lowercase();
-        collect_danger(&low, &mut reasons);
+        let tokens = shell_tokens(&input.to_ascii_lowercase());
+        let first = tokens.first().map(|s| base(s));
+        if !matches!(first, Some("echo" | "printf"))
+            && tokens.iter().any(|t| {
+                matches!(
+                    base(t),
+                    "sh" | "bash" | "zsh" | "dash" | "ksh" | "powershell" | "pwsh" | "cmd"
+                )
+            })
+        {
+            if let Some(i) = tokens
+                .iter()
+                .position(|t| matches!(t.as_str(), "-c" | "-command" | "/c"))
+            {
+                if let Some(command) = tokens.get(i + 1) {
+                    reasons.extend(
+                        classify(command, depth + 1)
+                            .reasons
+                            .into_iter()
+                            .filter(|r| *r != RiskReason::MultiLinePaste),
+                    );
+                }
+            }
+        }
     }
-
     let multi_line = statement_count > 1;
     if multi_line {
         reasons.push(RiskReason::MultiLinePaste);
     }
-
-    let risk = if reasons.iter().any(|r| is_danger(*r)) {
+    let mut unique = Vec::new();
+    for reason in reasons {
+        if !unique.contains(&reason) {
+            unique.push(reason);
+        }
+    }
+    let risk = if unique.iter().any(|r| is_danger(*r)) {
         RiskLevel::Danger
-    } else if multi_line || reasons.iter().any(|r| is_caution(*r)) {
+    } else if unique.iter().any(|r| is_caution(*r)) {
         RiskLevel::Caution
     } else {
         RiskLevel::Safe
     };
-
     CommandCheck {
         statement_count,
         multi_line,
         risk,
-        reasons,
+        reasons: unique,
     }
 }
 
-/// 剥离注释与引号字面量：
-/// - 单引号 / 双引号内的内容直接丢弃（避免误判引号里的危险词）；
-/// - 不在引号内、且位于行首或分隔符后的 `#` 视为注释起点，其后整行丢弃。
-fn normalize_line(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut i = 0;
-    let n = bytes.len();
-    while i < n {
-        let c = bytes[i];
-        match c {
-            b'\'' => {
-                in_single = !in_single;
-                i += 1;
-            }
-            b'"' => {
-                in_double = !in_double;
-                i += 1;
-            }
-            b'#' if !in_single && !in_double => {
-                let prev = if i > 0 { bytes[i - 1] } else { b' ' };
-                let boundary = i == 0
-                    || prev == b' '
-                    || prev == b'\t'
-                    || prev == b';'
-                    || prev == b'|'
-                    || prev == b'&'
-                    || prev == b'('
-                    || prev == b'{';
-                if boundary {
-                    break; // 注释到行尾
+// Preserve quoted arguments as single words, so a quoted executable/option is
+// checked but `echo 'rm -rf /'` is not mistaken for executing rm. This is a
+// heuristic, not a shell parser or an execution security boundary.
+fn shell_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && quote != Some('\'') {
+            if let Some(next) = chars.next() {
+                if next != '\n' {
+                    word.push(next);
                 }
-                out.push('#');
-                i += 1;
             }
-            _ => {
-                if !(in_single || in_double) {
-                    out.push(c as char);
+        } else if quote == Some(c) {
+            quote = None;
+        } else if quote.is_none() && (c == '\'' || c == '"') {
+            quote = Some(c);
+        } else if quote.is_none() && c == '#' && word.is_empty() {
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    break;
                 }
-                i += 1;
             }
+            tokens.push(";".into());
+        } else if quote.is_none() && (c.is_whitespace() || ";|&(){}<>".contains(c)) {
+            if !word.is_empty() {
+                tokens.push(std::mem::take(&mut word));
+            }
+            if c == '\n' {
+                tokens.push(";".into());
+            } else if !c.is_whitespace() {
+                tokens.push(c.to_string());
+            }
+        } else {
+            word.push(c);
         }
     }
-    out
+    if !word.is_empty() {
+        tokens.push(word);
+    }
+    tokens
+}
+fn base(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
 }
 
-/// 在已去注释 / 去引号并小写化的单行上扫描危险模式。
-fn collect_danger(line: &str, out: &mut Vec<RiskReason>) {
-    let tokens: Vec<&str> = line.split_whitespace().collect();
-    let has = |t: &str| tokens.contains(&t);
-
-    // 递归删除
-    if has("rm")
-        && (has("-r")
-            || has("-R")
-            || has("--recursive")
-            || has("-rf")
-            || has("-fr")
-            || has("-fR")
-            || has("-Rf"))
+fn collect_danger(input: &str, out: &mut Vec<RiskReason>) {
+    let lower = input.to_ascii_lowercase();
+    let tokens = shell_tokens(&lower);
+    let has = |t: &str| tokens.iter().any(|v| base(v) == t);
+    // Literal text printed by echo/printf is harmless; substitutions are checked separately.
+    if matches!(tokens.first().map(|t| base(t)), Some("echo" | "printf"))
+        && !tokens
+            .iter()
+            .any(|t| [";", "|", "&", ">", "<", "("].contains(&t.as_str()))
+    {
+        return;
+    }
+    let recursive = tokens.iter().any(|t| {
+        t == "--recursive"
+            || t == "-recurse"
+            || (t.starts_with('-') && !t.starts_with("--") && t[1..].contains('r'))
+    });
+    if ((has("rm") || has("remove-item")) && recursive)
+        || ((has("rd") || has("rmdir") || has("del")) && has("s"))
     {
         out.push(RiskReason::RecursiveDelete);
     }
-
-    // 格式化 / 分区工具（词首 / 精确匹配，避免 mymkfs 之类误报）
-    let disk_tool = tokens.iter().any(|t| {
-        t.starts_with("mkfs")
-            || t.starts_with("mke2fs")
-            || *t == "fdisk"
-            || *t == "parted"
-            || t.starts_with("cfdisk")
-            || t.starts_with("sfdisk")
-    });
-    if disk_tool {
+    if tokens.iter().any(|t| {
+        let b = base(t);
+        b == "mkfs"
+            || b.starts_with("mkfs.")
+            || [
+                "mke2fs",
+                "fdisk",
+                "parted",
+                "cfdisk",
+                "sfdisk",
+                "format",
+                "format-volume",
+                "clear-disk",
+            ]
+            .contains(&b)
+    }) {
         out.push(RiskReason::FormatFilesystem);
     }
-
-    // 直接写盘
     if has("dd") {
         out.push(RiskReason::DiskOverwrite);
     }
-
-    // Fork 炸弹
-    if line.contains(":(){") || line.contains(": (){") || line.contains(":(){:") {
+    if lower.replace([' ', '\t'], "").contains(":(){") {
         out.push(RiskReason::ForkBomb);
     }
-
-    // 重定向到设备文件
-    if line.contains(">/dev/")
-        || line.contains("> /dev/")
-        || line.contains(">>/dev/")
-        || line.contains(">> /dev/")
-    {
+    if tokens.windows(2).any(|w| {
+        w[0] == ">"
+            && w[1].starts_with("/dev/")
+            && !["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"].contains(&w[1].as_str())
+    }) {
         out.push(RiskReason::DeviceRedirect);
     }
-
-    // 电源 / 关机控制
-    if has("shutdown")
-        || has("reboot")
-        || has("halt")
-        || has("poweroff")
-        || line.contains("init 0")
-        || line.contains("init 6")
+    if [
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "stop-computer",
+        "restart-computer",
+    ]
+    .iter()
+    .any(|t| has(t))
+        || tokens
+            .windows(2)
+            .any(|w| base(&w[0]) == "init" && ["0", "6"].contains(&w[1].as_str()))
     {
         out.push(RiskReason::PowerControl);
     }
-
-    // 下载后直接喂给 shell
-    if (line.contains("curl") || line.contains("wget"))
-        && (line.contains("|sh")
-            || line.contains("| sh")
-            || line.contains("|bash")
-            || line.contains("| bash"))
+    if (has("curl") || has("wget"))
+        && has("|")
+        && ["sh", "bash", "zsh", "dash", "pwsh", "powershell"]
+            .iter()
+            .any(|t| has(t))
     {
         out.push(RiskReason::PipeToShell);
     }
-
-    // 破坏性 git 操作
     if has("git")
-        && (line.contains("reset --hard")
-            || line.contains("clean -f")
-            || line.contains("clean -fd")
-            || line.contains("clean -fdx")
-            || line.contains("push -f")
-            || line.contains("push --force")
-            || line.contains("checkout --"))
+        && ((has("reset") && has("--hard"))
+            || (has("clean")
+                && tokens
+                    .iter()
+                    .any(|t| t.starts_with('-') && !t.starts_with("--") && t.contains('f')))
+            || (has("push")
+                && tokens.iter().any(|t| {
+                    t == "--force"
+                        || t.starts_with("--force-with-lease")
+                        || (t.starts_with('-') && !t.starts_with("--") && t.contains('f'))
+                }))
+            || (has("checkout") && has("--")))
     {
         out.push(RiskReason::ForceGit);
     }
-
-    // 权限清零 / 递归改权限（行已小写化，故 -R 应写作 -r）
-    if has("chmod") && (has("-r") || has("--recursive") || line.contains("chmod 0")) {
+    if has("chmod")
+        && (recursive
+            || tokens
+                .iter()
+                .any(|t| t.starts_with('0') && t.chars().all(|c| matches!(c, '0'..='7'))))
+    {
         out.push(RiskReason::ZeroPerms);
     }
+}
+
+fn substitutions(input: &str) -> Vec<String> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut found = Vec::new();
+    let mut i = 0;
+    let mut quote = None;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && quote != Some('\'') {
+            i += 2;
+            continue;
+        }
+        if quote == Some(c) {
+            quote = None;
+            i += 1;
+            continue;
+        }
+        if quote.is_none() && (c == '\'' || c == '"') {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if quote.is_none()
+            && c == '#'
+            && (i == 0 || chars[i - 1].is_whitespace() || ";|&".contains(chars[i - 1]))
+        {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if quote != Some('\'') && (c == '`' || (c == '$' && chars.get(i + 1) == Some(&'('))) {
+            let backtick = c == '`';
+            let start = i + if backtick { 1 } else { 2 };
+            let mut end = start;
+            let mut nesting = 1;
+            let mut inner_quote = None;
+            while end < chars.len() {
+                let ch = chars[end];
+                if ch == '\\' {
+                    end += 2;
+                    continue;
+                }
+                if backtick && ch == '`' {
+                    break;
+                }
+                if !backtick {
+                    if inner_quote == Some(ch) {
+                        inner_quote = None;
+                    } else if inner_quote.is_none() && (ch == '\'' || ch == '"') {
+                        inner_quote = Some(ch);
+                    } else if inner_quote.is_none() && ch == '(' {
+                        nesting += 1;
+                    } else if inner_quote.is_none() && ch == ')' {
+                        nesting -= 1;
+                        if nesting == 0 {
+                            break;
+                        }
+                    }
+                }
+                end += 1;
+            }
+            found.push(chars[start..end.min(chars.len())].iter().collect());
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    found
 }
 
 fn is_danger(r: RiskReason) -> bool {
@@ -267,6 +393,78 @@ fn is_caution(r: RiskReason) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r26_quoted_paths_options_and_compound_commands_cannot_hide_deletion() {
+        for input in [
+            "/bin/rm -rI /tmp/x",
+            "'rm' '-rf' /tmp/x",
+            "echo ok;rm -rf /tmp/x",
+            "sudo /bin/rm --recursive /tmp/x",
+            "Remove-Item -Recurse C:/temp/x",
+            "rmdir /s C:/temp/x",
+        ] {
+            assert!(
+                classify_command(input)
+                    .reasons
+                    .contains(&RiskReason::RecursiveDelete),
+                "{input}"
+            );
+        }
+    }
+    #[test]
+    fn r26_executable_substitutions_and_shell_wrappers_are_checked() {
+        for input in [
+            "echo \"$(rm -rf /tmp/x)\"",
+            "echo `rm -rf /tmp/x`",
+            "echo <(rm -rf /tmp/x)",
+            "sh -c 'rm -rf /tmp/x'",
+            "bash -c \"reboot\"",
+            "curl https://example.test/a | /bin/bash",
+        ] {
+            assert_eq!(classify_command(input).risk, RiskLevel::Danger, "{input}");
+        }
+    }
+    #[test]
+    fn r26_literal_examples_and_comments_remain_safe() {
+        for input in [
+            "echo '$(rm -rf /)'",
+            "echo \"rm -rf /\"",
+            "printf '%s' 'reboot'",
+            "# echo $(reboot)",
+            "echo ok >/dev/null",
+            "echo '中文说明'",
+            "echo rm -rf /",
+        ] {
+            assert_eq!(classify_command(input).risk, RiskLevel::Safe, "{input}");
+        }
+    }
+    #[test]
+    fn r26_crlf_and_repeated_reasons_are_normalized() {
+        let check = classify_command("rm -rf /tmp/a\r\nrm -rf /tmp/b");
+        assert_eq!(check.statement_count, 2);
+        assert!(check.multi_line);
+        assert_eq!(
+            check
+                .reasons
+                .iter()
+                .filter(|r| **r == RiskReason::RecursiveDelete)
+                .count(),
+            1
+        );
+        assert_eq!(
+            classify_command("git push origin --force").risk,
+            RiskLevel::Danger
+        );
+        assert_eq!(classify_command("echo x >/dev/sdb").risk, RiskLevel::Danger);
+    }
+    #[test]
+    fn r26_ipc_serialization_uses_stable_camel_case_names() {
+        let json = serde_json::to_value(classify_command("rm -rf /tmp/x")).unwrap();
+        assert_eq!(json["risk"], "danger");
+        assert_eq!(json["reasons"][0], "recursiveDelete");
+        assert_eq!(json["statementCount"], 1);
+    }
 
     // ---------- P0：正常路径 / 日常使用 ----------
     #[test]
