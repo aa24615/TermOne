@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Host, Session } from "../plugin/types";
-import { report } from "./shared";
+import { report } from "../plugin/shared";
 interface Rule {
   id: string;
   name: string;

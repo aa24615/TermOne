@@ -16,7 +16,8 @@ import {
   uninstallPlugin,
   usePlugins,
 } from "../plugin/runtime";
-import type { Installed, Manifest } from "../plugin/types";
+import { installedKind, kindOf, kindName } from "../plugin/kinds";
+import type { ExtensionKind, Installed, Manifest } from "../plugin/types";
 import { useStore } from "../store";
 import { confirm, Modal } from "./Dialog";
 import "../plugin/ui.css";
@@ -25,6 +26,7 @@ import { useRegistry } from "../plugin/registry";
 import { PluginBoundary, ContributionView } from "../plugin/PluginSurface";
 
 interface MarketEntry {
+  kind?: ExtensionKind;
   id: string;
   name: string;
   version: string;
@@ -37,8 +39,14 @@ interface Audit {
   action: string;
   allowed: boolean;
 }
-export default function PluginManagerDialog() {
-  const installed = usePlugins((s) => s.installed);
+export default function ExtensionManagerDialog({
+  kind = "plugin",
+}: {
+  kind?: ExtensionKind;
+}) {
+  const allInstalled = usePlugins((s) => s.installed);
+  const installed = allInstalled.filter((p) => installedKind(p) === kind);
+  const noun = kindName(kind);
   const [busy, setBusy] = useState(false);
   const [audit, setAudit] = useState<Audit[]>([]);
   const [registry, setRegistry] = useState(
@@ -65,9 +73,9 @@ export default function PluginManagerDialog() {
   }, []);
   const approve = (m: Manifest) =>
     confirm({
-      title: "安装插件 · " + m.name,
+      title: "安装" + kindName(kindOf(m)) + " · " + m.name,
       message:
-        "请确认插件来源可信，并核对需要授予的权限（随包官方版按需加载，第三方在隔离环境中运行）：\n\n" +
+        "请确认来源可信并核对权限（应用在独立窗口运行，插件附加到主窗口）：\n\n" +
         m.permissions.map(describePermission).join("\n") +
         "\n\n安装及更新后默认关闭，需要手动启用。",
     });
@@ -77,10 +85,14 @@ export default function PluginManagerDialog() {
       multiple: false,
       filters: directory
         ? undefined
-        : [{ name: "TermOne 插件", extensions: ["tpk"] }],
+        : [{ name: "TermOne 扩展", extensions: ["tpk"] }],
     });
     if (typeof p !== "string") return;
     const pkg = readPackage(await invoke("plugin_read_package", { path: p }));
+    if (kindOf(pkg.manifest) !== kind)
+      throw new Error(
+        "此包为" + kindName(kindOf(pkg.manifest)) + "，请在对应管理页导入",
+      );
     if (!(await approve(pkg.manifest))) return;
     stopPlugin(pkg.manifest.id);
     await invoke("plugin_install", {
@@ -93,7 +105,11 @@ export default function PluginManagerDialog() {
     const bytes = await download(entry.url);
     await verifyDigest(bytes, entry.sha256);
     const pkg = readPackage({ archive: bytesB64(bytes) });
-    if (pkg.manifest.id !== entry.id || pkg.manifest.version !== entry.version)
+    if (
+      pkg.manifest.id !== entry.id ||
+      pkg.manifest.version !== entry.version ||
+      kindOf(pkg.manifest) !== (entry.kind ?? "plugin")
+    )
       throw new Error("仓库与包内清单不一致");
     if (!(await approve(pkg.manifest))) return;
     stopPlugin(pkg.manifest.id);
@@ -126,7 +142,7 @@ export default function PluginManagerDialog() {
       <button
         className="btn"
         disabled={busy || !p}
-        title={!p ? "请先安装插件" : undefined}
+        title={!p ? "请先安装" + noun : undefined}
         onClick={() => p && void run(() => togglePlugin(p))}
       >
         {p?.enabled ? "停用" : "启用"}
@@ -140,7 +156,7 @@ export default function PluginManagerDialog() {
             void openPlugin(p.id);
           }}
         >
-          打开
+          {kind === "app" ? "打开应用" : "打开"}
         </button>
       )}
       {p && (
@@ -151,7 +167,7 @@ export default function PluginManagerDialog() {
             void run(async () => {
               if (
                 await confirm({
-                  title: "卸载插件",
+                  title: "卸载" + noun,
                   message:
                     "将清除 " + p.manifest.name + " 的私有数据，确认卸载？",
                 })
@@ -166,23 +182,47 @@ export default function PluginManagerDialog() {
     </div>
   );
   const rows = [
-    ...catalog.map((m) => ({
-      manifest: m as Manifest,
-      existing: installed.find((p) => p.id === m.id),
-      official: true,
-    })),
+    ...catalog
+      .filter((m) => kindOf(m) === kind)
+      .map((m) => ({
+        manifest: m as Manifest,
+        existing: installed.find((p) => p.id === m.id),
+        official: true,
+      })),
     ...installed
-      .filter((p) => !catalog.some((m) => m.id === p.id))
+      .filter((p) => !catalog.some((m) => m.id === p.id && kindOf(m) === kind))
       .map((p) => ({ manifest: p.manifest, existing: p, official: false })),
   ];
   return (
     <Modal
-      title="插件管理"
+      title={noun + "管理"}
       onClose={() => useStore.getState().setDialog(null)}
       width={880}
     >
+      <div className="extension-tabs" role="tablist" aria-label="扩展类型">
+        {(["plugin", "app"] as const).map((type) => (
+          <button
+            key={type}
+            className={`btn${kind === type ? " selected" : ""}`}
+            role="tab"
+            aria-selected={kind === type}
+            onClick={() =>
+              useStore
+                .getState()
+                .setDialog({
+                  type: type === "app" ? "applications" : "plugins",
+                })
+            }
+          >
+            {kindName(type)}
+          </button>
+        ))}
+      </div>
       <p className="muted">
-        增值能力按需安装，默认关闭。第三方插件不能访问密钥环，联网只允许清单中声明的域名。
+        {kind === "app"
+          ? "应用在独立窗口打开，拥有自己的界面和运行状态，关闭应用不会影响主窗口终端。"
+          : "插件附加到主窗口，用于增强当前终端、会话和主窗口能力。"}
+        按需安装、默认停用，权限需明确授权。
       </p>
       <div className="plugin-actions">
         <button
@@ -221,7 +261,7 @@ export default function PluginManagerDialog() {
         </p>
       )}
       <h3 className="plugin-list-heading">
-        插件列表{" "}
+        {noun}列表{" "}
         <small>
           已安装 {installed.length} · 已启用{" "}
           {installed.filter((p) => p.enabled).length}
@@ -247,7 +287,7 @@ export default function PluginManagerDialog() {
                       ? p.source === "builtin"
                         ? "随包官方版"
                         : p.source
-                      : "官方插件"}
+                      : "官方" + noun}
                   </small>
                   <span
                     className={`plugin-state${p?.enabled ? " enabled" : ""}`}
@@ -281,11 +321,17 @@ export default function PluginManagerDialog() {
           );
         })}
       </div>
-      {Object.values(contributions).some((item) => item.kind === "setting") && (
-        <h3>插件设置</h3>
-      )}
+      {Object.values(contributions).some(
+        (item) =>
+          item.kind === "setting" &&
+          installed.some((p) => p.id === item.pluginId),
+      ) && <h3>{noun}设置</h3>}
       {Object.entries(contributions)
-        .filter(([, item]) => item.kind === "setting")
+        .filter(
+          ([, item]) =>
+            item.kind === "setting" &&
+            installed.some((p) => p.id === item.pluginId),
+        )
         .map(([key, item]) => (
           <PluginBoundary key={key} stop={() => stopPlugin(item.pluginId)}>
             <h4>{item.title}</h4>
@@ -293,8 +339,8 @@ export default function PluginManagerDialog() {
           </PluginBoundary>
         ))}
       <details>
-        <summary>为已安装插件添加联网域名</summary>
-        <p>只填写准确域名，不含协议和路径。添加后插件会停用，需要重新启用。</p>
+        <summary>为已安装扩展添加联网域名</summary>
+        <p>只填写准确域名，不含协议和路径。添加后扩展会停用，需要重新启用。</p>
         <input
           placeholder="api.example.com"
           value={domain}
@@ -327,10 +373,10 @@ export default function PluginManagerDialog() {
           </button>
         ))}
       </details>
-      <h3>自托管插件仓库</h3>
+      <h3>自托管{noun}仓库</h3>
       <p className="muted">
         仓库索引包含
-        id、name、version、url、sha256；下载后核验摘要并确认权限。仓库插件均按第三方隔离运行。
+        id、name、version、kind、url、sha256；下载后核验摘要、类型并确认权限。第三方扩展均在隔离环境运行。
       </p>
       <div className="plugin-actions">
         <input
@@ -360,7 +406,9 @@ export default function PluginManagerDialog() {
                         entry[key].length > 2000,
                     ) ||
                     !/^[a-f0-9]{64}$/i.test(entry.sha256) ||
-                    !/^\d+\.\d+\.\d+$/.test(entry.version),
+                    !/^\d+\.\d+\.\d+$/.test(entry.version) ||
+                    (entry.kind !== undefined &&
+                      !["plugin", "app"].includes(entry.kind)),
                 )
               )
                 throw new Error("仓库条目无效");
@@ -372,24 +420,26 @@ export default function PluginManagerDialog() {
           检查更新
         </button>
       </div>
-      {market.map((entry) => {
-        const p = installed.find((p) => p.id === entry.id);
-        return (
-          <section
-            className="plugin-card plugin-list-row"
-            key={entry.id}
-            aria-label={entry.name}
-          >
-            <div className="plugin-list-info">
-              <div className="plugin-list-title">
-                <strong>{entry.name}</strong>
-                <small>{entry.version}</small>
+      {market
+        .filter((entry) => (entry.kind ?? "plugin") === kind)
+        .map((entry) => {
+          const p = installed.find((p) => p.id === entry.id);
+          return (
+            <section
+              className="plugin-card plugin-list-row"
+              key={entry.id}
+              aria-label={entry.name}
+            >
+              <div className="plugin-list-info">
+                <div className="plugin-list-title">
+                  <strong>{entry.name}</strong>
+                  <small>{entry.version}</small>
+                </div>
               </div>
-            </div>
-            {actions(p, () => fromMarket(entry), p ? "更新 / 重装" : "安装")}
-          </section>
-        );
-      })}
+              {actions(p, () => fromMarket(entry), p ? "更新 / 重装" : "安装")}
+            </section>
+          );
+        })}
       {audit.length > 0 && (
         <>
           <h3>最近权限调用</h3>

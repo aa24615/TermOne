@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ImageAddon } from "@xterm/addon-image";
 import Zmodem, { type Session as ZSession, type Detection } from "zmodem.js";
 import type { Host } from "../plugin/types";
-import { report } from "./shared";
+import { report } from "../plugin/shared";
 interface Protocol {
   session: ZSession | null;
   status: string;

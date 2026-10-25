@@ -292,6 +292,11 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn close_all(&self) {
+        let ids: Vec<_> = self.sessions.lock().unwrap().keys().copied().collect();
+        for id in ids { let _ = self.close(id); }
+    }
+
     pub fn exists(&self, id: SessionId) -> bool {
         self.sessions.lock().unwrap().contains_key(&id)
     }

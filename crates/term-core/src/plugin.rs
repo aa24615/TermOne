@@ -125,10 +125,20 @@ fn is_valid_domain(domain: &str) -> bool {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtensionKind {
+    #[default]
+    Plugin,
+    App,
+}
+
 /// 插件清单（manifest.json）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
+    #[serde(default)]
+    pub kind: ExtensionKind,
     /// 逆域名唯一标识，如 `com.termone.sftp`。
     pub id: String,
     /// 展示名。
@@ -156,6 +166,17 @@ pub struct PluginManifest {
 impl PluginManifest {
     /// 校验清单合法性，返回首个错误原因。
     pub fn validate(&self) -> Result<()> {
+        if self.kind == ExtensionKind::App {
+            if !self.host_api.satisfies(&HostApiVersion::new(1, 1, 0)) {
+                return Err(TermError::Other("应用需要声明 Host API 1.1.0 或以上".into()));
+            }
+            if self.permissions.iter().any(|p| matches!(p,
+                PluginPermission::SessionRead | PluginPermission::SessionWrite |
+                PluginPermission::EventSubscribe | PluginPermission::GlobalShortcut
+            )) {
+                return Err(TermError::Other("应用不能声明主窗口会话或全局热键权限，请使用插件".into()));
+            }
+        }
         if self.name.len()>256 || self.description.len()>4096 || self.permissions.len()>64 || self.files.len()>256 || self.version.len()>64 { return Err(TermError::Other("插件清单超过大小限制".into())); }
         if !is_reverse_domain(&self.id) {
             return Err(TermError::Other(format!(
@@ -431,6 +452,23 @@ pub fn safe_package_path(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn application_kind_is_explicit_and_legacy_packages_remain_plugins() {
+        let mut value: serde_json::Value=serde_json::from_str(&valid_manifest_json()).unwrap();
+        assert_eq!(PluginManifest::from_json(value.to_string().as_bytes()).unwrap().kind,ExtensionKind::Plugin);
+        value["kind"]=serde_json::json!("app");assert!(PluginManifest::from_json(value.to_string().as_bytes()).is_err());
+        value["hostApi"]["minor"]=serde_json::json!(1);assert_eq!(PluginManifest::from_json(value.to_string().as_bytes()).unwrap().kind,ExtensionKind::App);
+        value["kind"]=serde_json::json!("unknown");assert!(PluginManifest::from_json(value.to_string().as_bytes()).is_err());
+    }
+    #[test]
+    fn applications_cannot_request_main_terminal_hooks() {
+        for permission in ["session-read","session-write","event-subscribe","global-shortcut"] {
+            let mut value:serde_json::Value=serde_json::from_str(&valid_manifest_json()).unwrap();
+            value["kind"]=serde_json::json!("app");value["hostApi"]["minor"]=serde_json::json!(1);
+            value["permissions"]=serde_json::json!([{"type":permission}]);
+            assert!(PluginManifest::from_json(value.to_string().as_bytes()).is_err(),"{permission}");
+        }
+    }
     #[test]
     fn package_rejects_every_unsafe_path_even_when_not_declared() {
         let json=valid_manifest_json();

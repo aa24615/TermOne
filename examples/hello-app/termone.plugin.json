@@ -1,0 +1,12 @@
+{
+  "id": "org.example.hello-app",
+  "name": "独立应用示例",
+  "kind": "app",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "hostApi": { "major": 1, "minor": 1, "patch": 0 },
+  "author": "Example",
+  "description": "在自己的窗口运行，不依赖主终端",
+  "permissions": [{ "type": "ui-panel" }, { "type": "ui-toast" }],
+  "files": ["index.js"]
+}

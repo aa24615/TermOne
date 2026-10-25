@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Host } from "../plugin/types";
-import { report } from "./shared";
+import { report } from "../plugin/shared";
 interface Theme {
   name: string;
   terminal: Record<string, string>;

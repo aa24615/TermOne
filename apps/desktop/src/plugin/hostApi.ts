@@ -6,11 +6,13 @@ import { scheduleSync, useStore } from "../store";
 import { attachTerminals, observeOutput } from "./terminalBridge";
 import { allowedUrl, has, IPC_ALLOW } from "./permissions";
 import { register } from "./registry";
+import { installedKind } from "./kinds";
 import { confirm } from "../components/Dialog";
 import type { Dispose, Host, Installed, Permission } from "./types";
 
 export function createHost(plugin: Installed): Host {
   const controller = new AbortController();
+  const application = installedKind(plugin) === "app";
   const disposals = new Set<Dispose>();
   const own = (dispose: Dispose) => {
     if (disposals.size >= 128) {
@@ -24,7 +26,17 @@ export function createHost(plugin: Installed): Host {
     };
   };
   const assert = (permission: Permission) => {
-    if (controller.signal.aborted) throw new Error("插件已停用");
+    if (controller.signal.aborted) throw new Error("扩展已停用");
+    if (
+      application &&
+      [
+        "session-read",
+        "session-write",
+        "event-subscribe",
+        "global-shortcut",
+      ].includes(permission.type)
+    )
+      throw new Error("应用不能访问主窗口会话或全局快捷键");
     if (!has(plugin.manifest, permission)) {
       void invoke("plugin_authorize", {
         id: plugin.id,
@@ -41,16 +53,18 @@ export function createHost(plugin: Installed): Host {
     await invoke("plugin_authorize", { id: plugin.id, permission, action });
   };
   const sessions = () =>
-    useStore
-      .getState()
-      .tabs.flatMap((t) => allLeaves(t.layout))
-      .filter((p) => p.sessionId && !p.exitInfo)
-      .map((p) => ({
-        id: p.sessionId!,
-        title: p.title,
-        profileId: p.profileId,
-        kind: p.kind,
-      }));
+    application
+      ? []
+      : useStore
+          .getState()
+          .tabs.flatMap((t) => allLeaves(t.layout))
+          .filter((p) => p.sessionId && !p.exitInfo)
+          .map((p) => ({
+            id: p.sessionId!,
+            title: p.title,
+            profileId: p.profileId,
+            kind: p.kind,
+          }));
   const host: Host = {
     ui: {
       registerPanel(id, title, render) {
@@ -229,7 +243,7 @@ export function createHost(plugin: Installed): Host {
       });
     },
     setInterval(fn, ms) {
-      if (controller.signal.aborted) throw new Error("插件已停用");
+      if (controller.signal.aborted) throw new Error("扩展已停用");
       const timer = setInterval(
         () => {
           try {

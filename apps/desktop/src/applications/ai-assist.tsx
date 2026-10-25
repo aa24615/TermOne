@@ -63,7 +63,7 @@ export default function AiAssist({ host }: { host: Host }) {
     <div className="plugin-stack">
       <p className="muted">
         API Key
-        仅保留在当前面板内存，关闭面板即清除。不会自动读取终端内容，也不会执行生成的命令。新增服务域名请在插件管理中明确授权。
+        仅保留在当前应用内存，关闭窗口即清除。不会自动读取终端内容，也不会执行生成的命令。新增服务域名请在应用管理中明确授权。
       </p>
       <label>
         API 地址

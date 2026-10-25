@@ -330,13 +330,10 @@ pub async fn settings_all(state: State<'_, AppState>) -> CmdResult<Vec<SettingRo
 }
 
 #[tauri::command]
-pub async fn setting_set(state: State<'_, AppState>, key: String, value: String) -> CmdResult<()> {
-    state
-        .db
-        .lock()
-        .unwrap()
-        .setting_set(&key, &value)
-        .map_err(|e| e.to_string())
+pub async fn setting_set(app: AppHandle, state: State<'_, AppState>, key: String, value: String) -> CmdResult<()> {
+    state.db.lock().unwrap().setting_set(&key, &value).map_err(|e| e.to_string())?;
+    let _=app.emit("settings:changed", &key);
+    Ok(())
 }
 
 // ---------------- 机密（系统密钥环） ----------------

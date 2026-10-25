@@ -57,6 +57,7 @@ export type DialogState =
   | { type: "account" }
   | { type: "about" }
   | { type: "plugins" }
+  | { type: "applications" }
   | { type: "commands" }
   | null;
 

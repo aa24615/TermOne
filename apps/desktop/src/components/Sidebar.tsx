@@ -296,6 +296,7 @@ export function Sidebar() {
       </div>
       <AccountSection />
       <div className="sidebar-footer">
+        <button className="side-btn" onClick={() => setDialog({type:"applications"})}>▦ 应用管理</button>
         <button
           className="side-btn"
           onClick={() => setDialog({ type: "plugins" })}

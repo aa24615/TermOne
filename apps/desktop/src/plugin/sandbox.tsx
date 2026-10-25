@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { installedKind, kindName } from "./kinds";
 import { createHost } from "./hostApi";
 import type { Host, Installed, PluginModule } from "./types";
 
@@ -360,13 +361,15 @@ function ExternalPanel({ plugin, outer }: { plugin: Installed; outer: Host }) {
       <iframe
         key={revision}
         ref={frame}
-        title="插件隔离运行环境"
+        title={kindName(installedKind(plugin)) + "隔离运行环境"}
         sandbox="allow-scripts"
         srcDoc={src}
         style={{ display: "none" }}
       />
       {error ? (
-        <p role="alert">插件出错：{error}</p>
+        <p role="alert">
+          {kindName(installedKind(plugin))}出错：{error}
+        </p>
       ) : view ? (
         renderView(view, (id, value) =>
           post({

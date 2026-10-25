@@ -27,7 +27,7 @@ export function readPackage(input: {
         if (e.name.endsWith("/")) return false;
         expanded += e.originalSize;
         if (expanded > 16 * 1024 * 1024 || ++count > 256)
-          throw new Error("插件文件过大或过多");
+          throw new Error("扩展文件过大或过多");
         return true;
       },
     });
@@ -54,7 +54,7 @@ export function readPackage(input: {
     manifest.files.some((f) => !Object.hasOwn(files, f)) ||
     !Object.hasOwn(files, manifest.entry)
   )
-    throw new Error("插件缺少声明文件");
+    throw new Error("扩展缺少声明文件");
   return { manifest, files };
 }
 export async function download(url: string): Promise<Uint8Array> {
@@ -98,5 +98,5 @@ export async function verifyDigest(bytes: Uint8Array, sha256: string) {
     Array.from(hash, (x) => x.toString(16).padStart(2, "0")).join("") !==
     sha256.toLowerCase()
   )
-    throw new Error("插件摘要不匹配，已拒绝安装");
+    throw new Error("扩展摘要不匹配，已拒绝安装");
 }

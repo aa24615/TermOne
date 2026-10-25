@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { applicationIdFromLocation, installedKind } from "./kinds";
 import { create } from "zustand";
 import { isTauri } from "../env";
 import { useStore } from "../store";
@@ -6,11 +8,11 @@ import { createHost } from "./hostApi";
 import type { Host, Installed, PluginModule } from "./types";
 
 const modules: Record<string, () => Promise<PluginModule>> = {
-  "com.termone.sftp": () => import("../plugins/sftp"),
+  "com.termone.sftp": () => import("../applications/sftp"),
   "com.termone.snippets": () => import("../plugins/snippets"),
-  "com.termone.session-log": () => import("../plugins/session-log"),
+  "com.termone.session-log": () => import("../applications/session-log"),
   "com.termone.broadcast": () => import("../plugins/broadcast"),
-  "com.termone.ai-assist": () => import("../plugins/ai-assist"),
+  "com.termone.ai-assist": () => import("../applications/ai-assist"),
   "com.termone.triggers": () => import("../plugins/triggers"),
   "com.termone.theme-market": () => import("../plugins/theme-market"),
   "com.termone.quake": () => import("../plugins/quake"),
@@ -42,17 +44,46 @@ const pending = new Map<string, Promise<void>>();
 const generations = new Map<string, number>();
 const hosts = new Map<string, Host>();
 let initializing: Promise<void> | null = null;
+let eventListener: Promise<() => void> | null = null;
+const openingApplications = new Map<string, Promise<void>>();
 export async function refreshPlugins() {
   if (!isTauri()) return;
   const installed = await invoke<Installed[]>("plugin_list");
+  for (const id of Object.keys(usePlugins.getState().active)) {
+    const next = installed.find((p) => p.id === id && p.enabled);
+    const previous = usePlugins.getState().installed.find((p) => p.id === id);
+    if (
+      !next ||
+      JSON.stringify(next.manifest) !== JSON.stringify(previous?.manifest)
+    )
+      stopPlugin(id);
+  }
   usePlugins.setState({ installed });
 }
 export async function initPlugins() {
   if (!initializing)
     initializing = (async () => {
+      if (isTauri() && !eventListener)
+        eventListener = listen("extensions:changed", () => {
+          void refreshPlugins()
+            .then(() => {
+              if (!applicationIdFromLocation())
+                for (const p of usePlugins.getState().installed)
+                  if (
+                    p.enabled &&
+                    installedKind(p) === "plugin" &&
+                    background.has(p.id)
+                  )
+                    void activatePlugin(p.id);
+            })
+            .catch((e) => useStore.getState().showToast(String(e), "error"));
+        });
+      if (eventListener) await eventListener;
       await refreshPlugins();
+      if (applicationIdFromLocation()) return;
       for (const p of usePlugins.getState().installed)
-        if (p.enabled && background.has(p.id)) void activatePlugin(p.id);
+        if (p.enabled && installedKind(p) === "plugin" && background.has(p.id))
+          void activatePlugin(p.id);
     })();
   return initializing;
 }
@@ -81,6 +112,11 @@ export async function activatePlugin(id: string): Promise<void> {
     .getState()
     .installed.find((p) => p.id === id && p.enabled);
   if (!p) return;
+  if (
+    (installedKind(p) === "app" && applicationIdFromLocation() !== p.id) ||
+    (installedKind(p) === "plugin" && applicationIdFromLocation())
+  )
+    throw new Error("扩展不能在此窗口中运行");
   const generation = generations.get(id) ?? 0;
   const host = createHost(p);
   hosts.set(id, host);
@@ -96,7 +132,7 @@ export async function activatePlugin(id: string): Promise<void> {
           ? modules[id]()
           : import("./sandbox").then((m) => m.externalModule(p)),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("插件加载超时")), 5000);
+          timer = setTimeout(() => reject(new Error("扩展加载超时")), 5000);
         }),
       ]);
       if (timer) clearTimeout(timer);
@@ -107,7 +143,7 @@ export async function activatePlugin(id: string): Promise<void> {
       const dispose = await Promise.race([
         module.activate?.(host),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("插件激活超时")), 5000);
+          timer = setTimeout(() => reject(new Error("扩展激活超时")), 5000);
         }),
       ]);
       if (typeof dispose === "function")
@@ -140,14 +176,33 @@ export async function activatePlugin(id: string): Promise<void> {
   return work;
 }
 export async function openPlugin(id: string) {
-  usePlugins.setState({ selected: id });
-  await activatePlugin(id);
+  try {
+    const item = usePlugins
+      .getState()
+      .installed.find((p) => p.id === id && p.enabled);
+    if (!item) throw new Error("请先安装并启用扩展");
+    if (installedKind(item) === "app") {
+      if (!openingApplications.has(id)) {
+        const opening = invoke<void>("application_open", { id }).finally(() =>
+          openingApplications.delete(id),
+        );
+        openingApplications.set(id, opening);
+      }
+      await openingApplications.get(id);
+      return;
+    }
+    usePlugins.setState({ selected: id });
+    await activatePlugin(id);
+  } catch (e) {
+    useStore.getState().showToast(String(e), "error");
+  }
 }
 export async function togglePlugin(p: Installed) {
   stopPlugin(p.id);
   await invoke("plugin_set_enabled", { id: p.id, enabled: !p.enabled });
   await refreshPlugins();
-  if (!p.enabled && background.has(p.id)) await activatePlugin(p.id);
+  if (!p.enabled && installedKind(p) === "plugin" && background.has(p.id))
+    await activatePlugin(p.id);
 }
 export async function uninstallPlugin(id: string) {
   stopPlugin(id);

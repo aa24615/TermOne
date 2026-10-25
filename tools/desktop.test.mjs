@@ -438,3 +438,101 @@ test("Splitting the welcome tab still preserves its layout for restore", () => {
   assert.equal(readLayouts(raw).length, 1);
   assert.equal(readLayouts(raw)[0].children[0].kind, "welcome");
 });
+
+test("Applications declare a compatible API and cannot request terminal hooks", () => {
+  const app = {
+    ...manifest,
+    kind: "app",
+    hostApi: { major: 1, minor: 1, patch: 0 },
+  };
+  assert.equal(validateManifest(app).kind, "app");
+  assert.throws(() => validateManifest({ ...app, kind: "unknown" }));
+  assert.throws(() =>
+    validateManifest({ ...app, hostApi: { major: 1, minor: 0, patch: 0 } }),
+  );
+  for (const type of [
+    "session-read",
+    "session-write",
+    "event-subscribe",
+    "global-shortcut",
+  ])
+    assert.throws(() => validateManifest({ ...app, permissions: [{ type }] }));
+});
+test("Legacy official SFTP opens a native application without activating a main-window panel", async () => {
+  const { usePlugins, openPlugin } = await import(
+    "../apps/desktop/src/plugin/runtime.ts"
+  );
+  const { default: catalog } = await import(
+    "../apps/desktop/src/plugin/catalog.json",
+    { with: { type: "json" } }
+  );
+  const m = { ...catalog.find((p) => p.id === "com.termone.sftp") };
+  delete m.kind;
+  const item = { id: m.id, manifest: m, source: "builtin", enabled: true };
+  usePlugins.setState({ installed: [item], selected: null, active: {} });
+  const calls = [];
+  let finish;
+  mockIPC((cmd, args) => {
+    calls.push([cmd, args]);
+    if (cmd === "application_open")
+      return new Promise((resolve) => (finish = resolve));
+  });
+  const first = openPlugin(item.id),
+    second = openPlugin(item.id);
+  assert.equal(calls.filter((c) => c[0] === "application_open").length, 1);
+  finish();
+  await Promise.all([first, second]);
+  assert.equal(usePlugins.getState().selected, null);
+  assert.deepEqual(usePlugins.getState().active, {});
+});
+test("Application Host exposes no main sessions or terminal write path", async () => {
+  const calls = [];
+  mockIPC((cmd) => {
+    calls.push(cmd);
+    return null;
+  });
+  const app = createHost({
+    id: manifest.id,
+    manifest: {
+      ...manifest,
+      kind: "app",
+      permissions: [
+        { type: "session-write" },
+        { type: "session-read" },
+        { type: "event-subscribe" },
+      ],
+    },
+    source: "builtin",
+    enabled: true,
+  });
+  assert.deepEqual(app.sessions(), []);
+  await assert.rejects(app.write("remote", "echo blocked"));
+  assert.throws(() => app.output(() => {}));
+  assert.throws(() => app.onSessions(() => {}));
+  assert.ok(!calls.includes("session_write"));
+  app.dispose();
+});
+test("Application classification cannot be spoofed by reusing an official id", async () => {
+  const { installedKind, kindOf } = await import(
+    "../apps/desktop/src/plugin/kinds.ts"
+  );
+  assert.equal(kindOf(manifest), "plugin");
+  assert.equal(
+    installedKind({
+      id: "com.termone.sftp",
+      manifest,
+      source: "local",
+      enabled: true,
+    }),
+    "plugin",
+  );
+  assert.equal(
+    installedKind({
+      id: "com.termone.sftp",
+      manifest,
+      source: "builtin",
+      enabled: true,
+    }),
+    "app",
+  );
+});

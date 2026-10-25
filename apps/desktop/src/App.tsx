@@ -19,7 +19,9 @@ import { PaneView } from "./components/PaneView";
 import { isTauri } from "./env";
 import { allLeaves } from "./paneTree";
 import { useStore } from "./store";
-const PluginManagerDialog = lazy(() => import("./components/PluginManagerDialog"));
+const ExtensionManagerDialog = lazy(
+  () => import("./components/ExtensionManagerDialog"),
+);
 
 export default function App() {
   const init = useStore((s) => s.init);
@@ -31,7 +33,9 @@ export default function App() {
 
   useEffect(() => {
     void init();
-    void initPlugins().catch(e => useStore.getState().showToast(String(e), "error"));
+    void initPlugins().catch((e) =>
+      useStore.getState().showToast(String(e), "error"),
+    );
   }, [init]);
 
   useEffect(() => {
@@ -40,8 +44,24 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       const alt = e.altKey && !mod;
       const k = e.key.toLowerCase();
-      if (alt && e.shiftKey && k === "p") { e.preventDefault(); e.stopPropagation(); s.setDialog({ type: "commands" }); return; }
-      for (const command of Object.values(useRegistry.getState().items)) { if (command.kind === "command" && command.shortcut && matchesShortcut(e,command.shortcut)) { e.preventDefault(); e.stopPropagation(); command.run?.(); return; } }
+      if (alt && e.shiftKey && k === "p") {
+        e.preventDefault();
+        e.stopPropagation();
+        s.setDialog({ type: "commands" });
+        return;
+      }
+      for (const command of Object.values(useRegistry.getState().items)) {
+        if (
+          command.kind === "command" &&
+          command.shortcut &&
+          matchesShortcut(e, command.shortcut)
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          command.run?.();
+          return;
+        }
+      }
 
       // Alt 组合键：终端聚焦时也可用；
       // stopPropagation 阻止 xterm 把它作为 ESC 序列发给 Shell
@@ -135,7 +155,10 @@ export default function App() {
           <TabBar />
           <div className="term-stack">
             {tabs.map((t) => (
-              <div key={t.id} className={`term-page${t.id === activeTabId ? " active" : ""}`}>
+              <div
+                key={t.id}
+                className={`term-page${t.id === activeTabId ? " active" : ""}`}
+              >
                 <PaneView node={t.layout} tabId={t.id} />
               </div>
             ))}
@@ -145,17 +168,40 @@ export default function App() {
         <PluginSurface />
       </div>
 
-      {dialog?.type === "profile" && <ProfileDialog profileId={dialog.profileId} />}
+      {dialog?.type === "profile" && (
+        <ProfileDialog profileId={dialog.profileId} />
+      )}
       {dialog?.type === "settings" && <SettingsDialog />}
       {dialog?.type === "account" && <AccountDialog />}
       {dialog?.type === "about" && <AboutDialog />}
-      {dialog?.type === "plugins" && <Suspense fallback={<Modal title="插件管理" onClose={() => useStore.getState().setDialog(null)}>正在加载…</Modal>}><PluginManagerDialog /></Suspense>}
+      {(dialog?.type === "plugins" || dialog?.type === "applications") && (
+        <Suspense
+          fallback={
+            <Modal
+              title={dialog.type === "applications" ? "应用管理" : "插件管理"}
+              onClose={() => useStore.getState().setDialog(null)}
+            >
+              正在加载…
+            </Modal>
+          }
+        >
+          <ExtensionManagerDialog
+            kind={dialog.type === "applications" ? "app" : "plugin"}
+          />
+        </Suspense>
+      )}
       {dialog?.type === "commands" && <CommandsDialog />}
       <Dialogs />
 
       {confirmExit && (
-        <Modal title="退出 TermOne" onClose={() => setConfirmExit(false)} width={380}>
-          <p className="confirm-text">还有 {openCount} 个会话正在运行，退出将关闭它们。确定退出吗？</p>
+        <Modal
+          title="退出 TermOne"
+          onClose={() => setConfirmExit(false)}
+          width={380}
+        >
+          <p className="confirm-text">
+            还有 {openCount} 个会话正在运行，退出将关闭它们。确定退出吗？
+          </p>
           <div className="form-actions">
             <button className="btn" onClick={() => setConfirmExit(false)}>
               取消

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import "../plugin/ui.css";
-import type { Host, Session } from "../plugin/types";
+import "./ui.css";
+import type { Host, Session } from "./types";
 export function useSessions(host: Host) {
   const [sessions, setSessions] = useState<Session[]>(host.sessions());
   useEffect(() => {

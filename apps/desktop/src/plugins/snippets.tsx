@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Host } from "../plugin/types";
-import { SessionPicker, report } from "./shared";
+import { SessionPicker, report } from "../plugin/shared";
 interface Snippet {
   id: string;
   title: string;

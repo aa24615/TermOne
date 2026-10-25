@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Host } from "../plugin/types";
-import { downloadText, report } from "./shared";
+import { downloadText, report } from "../plugin/shared";
 interface Log {
   id: string;
   size: number;

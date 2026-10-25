@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Host } from "../plugin/types";
 import type { SftpEntry, LocalEntry } from "../types";
 import { promptText } from "../components/Dialog";
-import { joinPath, report } from "./shared";
+import { joinPath, report } from "../plugin/shared";
 interface Task {
   id: string;
   command: "sftp_download" | "sftp_upload";
@@ -132,9 +132,19 @@ export default function Sftp({ host }: { host: Host }) {
       </label>
       <p className="muted">
         使用系统 ssh-agent
-        或密钥；口令不会提供给插件。将列表中的文件拖到另一侧即可传输。
+        或密钥；口令不会提供给应用。将列表中的文件拖到另一侧即可传输。
       </p>
       <div className="plugin-actions">
+        <button
+          className="btn"
+          onClick={() =>
+            report(host, async () =>
+              setProfiles(await host.invoke("profile_refs")),
+            )
+          }
+        >
+          刷新档案
+        </button>
         <input
           aria-label="远端路径"
           placeholder="远端路径（空为家目录）"

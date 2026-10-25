@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Host } from "../plugin/types";
-import { report, useSessions } from "./shared";
+import { report, useSessions } from "../plugin/shared";
 export default function Broadcast({ host }: { host: Host }) {
   const sessions = useSessions(host);
   const [targets, setTargets] = useState<string[]>([]);

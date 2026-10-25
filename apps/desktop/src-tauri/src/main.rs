@@ -1,14 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod applications;
 mod commands;
-mod state;
 mod plugins;
+mod state;
 mod workspace;
 
 use std::sync::Mutex;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 use tauri::Manager;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use term_core::{Db, SessionManager};
 
@@ -35,6 +36,7 @@ fn main() {
             db,
         })
         .invoke_handler(tauri::generate_handler![
+            applications::application_open,
             commands::app_info,
             commands::command_check,
             commands::default_shell,
@@ -90,6 +92,12 @@ fn main() {
             workspace::sync_requeue_all,
             workspace::quake_set,
         ])
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<state::AppState>().sessions.close_all();
+                let _ = window.app_handle().global_shortcut().unregister_all();
+            }
+        })
         .setup(|_app| {
             // Windows 隐藏系统标题栏由前端自绘；macOS 使用 Overlay 保留交通灯
             #[cfg(any(target_os = "windows", target_os = "linux"))]

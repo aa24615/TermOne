@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Dispose, Host } from "../plugin/types";
-import { report } from "./shared";
+import { report } from "../plugin/shared";
 const state = new WeakMap<Host, { shortcut: string; dispose: Dispose }>();
 export async function activate(host: Host) {
   const shortcut =

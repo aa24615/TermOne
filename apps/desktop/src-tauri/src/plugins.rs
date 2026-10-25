@@ -9,7 +9,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use term_core::{
     plugin::{safe_package_path, validate_tpk},
     HostApiVersion, PluginManifest, PluginPermission, PluginRow, SftpAuth, SftpRequest, SnippetRow,
@@ -25,7 +25,7 @@ impl CallGuard {
     fn acquire(id: &str) -> Result<Self> {
         let mut calls = INFLIGHT.lock().map_err(err)?;
         if calls.get(id).copied().unwrap_or(0) >= 4 || calls.values().sum::<usize>() >= 32 {
-            return Err("插件并发操作超限，请稍后重试".into());
+            return Err("扩展并发操作超限，请稍后重试".into());
         }
         *calls.entry(id.to_owned()).or_default() += 1;
         Ok(Self(id.to_owned()))
@@ -75,7 +75,7 @@ fn valid_id(id: &str) -> Result<()> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
         || id.split('.').any(|p| p.is_empty())
     {
-        return Err("插件 ID 非法".into());
+        return Err("扩展 ID 非法".into());
     }
     Ok(())
 }
@@ -83,15 +83,15 @@ fn path(app: &AppHandle, id: &str) -> Result<PathBuf> {
     valid_id(id)?;
     Ok(root(app)?.join(id))
 }
-fn parse(value: &Value) -> Result<PluginManifest> {
+pub(crate) fn parse(value: &Value) -> Result<PluginManifest> {
     let m = PluginManifest::from_json(&serde_json::to_vec(value).map_err(err)?).map_err(err)?;
-    if !HostApiVersion::new(1, 0, 0).satisfies(&m.host_api) {
-        return Err("插件需要更高版本的 Host API".into());
+    if !HostApiVersion::new(1, 1, 0).satisfies(&m.host_api) {
+        return Err("扩展需要更高版本的 Host API".into());
     }
     for p in &m.permissions {
         if let PluginPermission::Ipc { command } = p {
             if !IPC.contains(&command.as_str()) {
-                return Err(format!("不支持的插件 IPC 权限: {command}"));
+                return Err(format!("不支持的扩展 IPC 权限: {command}"));
             }
         }
     }
@@ -108,10 +108,10 @@ fn write_json(p: &Path, v: &Value) -> Result<()> {
     fs::write(&temp, serde_json::to_vec(v).map_err(err)?).map_err(err)?;
     fs::rename(temp, p).map_err(err)
 }
-fn approved(app: &AppHandle, id: &str, enabled: bool) -> Result<Value> {
+pub(crate) fn approved(app: &AppHandle, id: &str, enabled: bool) -> Result<Value> {
     let local = read_json(&path(app, id)?.join("approval.json"))?;
     if enabled && local["enabled"] != true {
-        return Err("插件未启用".into());
+        return Err("扩展未启用".into());
     }
     parse(&local["manifest"])?;
     Ok(local)
@@ -133,6 +133,43 @@ fn audit(app: &AppHandle, id: &str, action: &str, allowed: bool) {
             let _ = writeln!(f, "{event}");
         }
     }
+}
+
+fn migrate_builtin(value: &mut Value) -> bool {
+    if value["source"] != "builtin" {
+        return false;
+    }
+    let catalog: Vec<Value> = serde_json::from_str(CATALOG).unwrap_or_default();
+    if let Some(current) = catalog.iter().find(|m| m["id"] == value["manifest"]["id"]) {
+        let mut changed = false;
+        for key in ["kind", "hostApi"] {
+            if value["manifest"][key] != current[key] {
+                value["manifest"][key] = current[key].clone();
+                changed = true;
+            }
+        }
+        return changed;
+    }
+    false
+}
+fn changed(app: &AppHandle, id: &str) {
+    let _ = app.emit("extensions:changed", json!({"id":id}));
+}
+fn context_allowed(kind: term_core::plugin::ExtensionKind, window: &str, id: &str) -> bool {
+    match kind {
+        term_core::plugin::ExtensionKind::Plugin => window == "main",
+        term_core::plugin::ExtensionKind::App => window == crate::applications::label(id),
+    }
+}
+fn ensure_context(app: &AppHandle, window: &WebviewWindow, id: &str) -> Result<()> {
+    let value = approved(app, id, true)?;
+    let manifest = parse(&value["manifest"])?;
+    let allowed = context_allowed(manifest.kind, window.label(), id);
+    if !allowed {
+        audit(app, id, "window-context-denied", false);
+        return Err("扩展只能在自己的运行窗口中调用能力".into());
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -160,7 +197,19 @@ pub fn plugin_list(app: AppHandle) -> Result<Vec<Installed>> {
                 .to_string_lossy()
                 .starts_with('.')
         {
-            if let Ok(v) = read_json(&p.join("approval.json")) {
+            if let Ok(mut v) = read_json(&p.join("approval.json")) {
+                if migrate_builtin(&mut v) {
+                    write_json(&p.join("approval.json"), &v)?;
+                    let state = app.state::<AppState>();
+                    let db = state.db.lock().map_err(err)?;
+                    if let Some(mut row) = db
+                        .plugin_get(v["manifest"]["id"].as_str().unwrap_or(""))
+                        .map_err(err)?
+                    {
+                        row.manifest = v["manifest"].to_string();
+                        db.plugin_save(row).map_err(err)?;
+                    }
+                }
                 if let Ok(m) = parse(&v["manifest"]) {
                     out.push(Installed {
                         id: m.id,
@@ -190,29 +239,30 @@ pub fn plugin_install(
         let entry = catalog
             .into_iter()
             .find(|m| m["id"] == manifest["id"])
-            .ok_or("未知官方插件")?;
+            .ok_or("未知官方扩展")?;
         (entry, BTreeMap::new())
     } else {
         (manifest, files)
     };
     if !["builtin", "local", "market", "dev"].contains(&source.as_str()) {
-        return Err("插件来源非法".into());
+        return Err("扩展来源非法".into());
     }
     let m = parse(&manifest)?;
+    crate::applications::close(&app, &m.id);
     let mut decoded = BTreeMap::new();
     let mut size = 0;
     if source != "builtin" {
         if files.len() > 256 {
-            return Err("插件文件过多".into());
+            return Err("扩展文件过多".into());
         }
         for (name, data) in files {
             if !safe_package_path(&name) || name == "approval.json" || name == ".dev-path" {
-                return Err("不安全的插件路径".into());
+                return Err("不安全的扩展路径".into());
             }
             let bytes = B64.decode(data).map_err(err)?;
             size += bytes.len();
             if size > MAX_BYTES {
-                return Err("插件解压后不能超过 16 MiB".into());
+                return Err("扩展解压后不能超过 16 MiB".into());
             }
             decoded.insert(name, bytes);
         }
@@ -279,6 +329,7 @@ pub fn plugin_install(
         }
         let _ = fs::remove_dir_all(old);
         audit(&app, &m.id, "install", true);
+        changed(&app, &m.id);
         Ok(())
     })();
     if stage.exists() {
@@ -297,6 +348,7 @@ pub fn plugin_set_enabled(
     let mut v = approved(&app, &id, false)?;
     v["enabled"] = json!(enabled);
     if !enabled {
+        crate::applications::close(&app, &id);
         v["paths"] = json!([]);
     }
     write_json(&path(&app, &id)?.join("approval.json"), &v)?;
@@ -310,12 +362,14 @@ pub fn plugin_set_enabled(
         .plugin_set_state(&id, if enabled { "enabled" } else { "disabled" })
         .map_err(err)?;
     audit(&app, &id, if enabled { "enable" } else { "disable" }, true);
+    changed(&app, &id);
     Ok(())
 }
 
 #[tauri::command]
 pub fn plugin_uninstall(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
     approved(&app, &id, false)?;
+    crate::applications::close(&app, &id);
     if id == "com.termone.quake" {
         let _ = crate::workspace::quake_set(app.clone(), None);
     }
@@ -333,6 +387,7 @@ pub fn plugin_uninstall(app: AppHandle, state: State<'_, AppState>, id: String) 
         .plugin_delete(&id)
         .map_err(err)?;
     audit(&app, &id, "uninstall", true);
+    changed(&app, &id);
     Ok(())
 }
 
@@ -343,21 +398,21 @@ fn walk(
     size: &mut u64,
 ) -> Result<()> {
     if prefix.split('/').count() > 32 {
-        return Err("插件目录层级过深".into());
+        return Err("扩展目录层级过深".into());
     }
     for item in fs::read_dir(dir).map_err(err)? {
         let item = item.map_err(err)?;
         let meta = item.path().symlink_metadata().map_err(err)?;
         let name = format!("{}{}", prefix, item.file_name().to_string_lossy());
         if !safe_package_path(&name) || meta.file_type().is_symlink() {
-            return Err("插件目录含不安全路径或符号链接".into());
+            return Err("扩展目录含不安全路径或符号链接".into());
         }
         if meta.is_dir() {
             walk(&item.path(), &(name + "/"), files, size)?;
         } else {
             *size += meta.len();
             if *size > MAX_BYTES as u64 || files.len() >= 256 {
-                return Err("插件目录过大".into());
+                return Err("扩展目录过大".into());
             }
             files.insert(name, B64.encode(fs::read(item.path()).map_err(err)?));
         }
@@ -368,6 +423,48 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_builtin_application_migrates_without_changing_approval() {
+        let mut manifest: Value = serde_json::from_str::<Vec<Value>>(CATALOG)
+            .unwrap()
+            .remove(0);
+        manifest.as_object_mut().unwrap().remove("kind");
+        manifest["hostApi"]["minor"] = json!(0);
+        let permissions = manifest["permissions"].clone();
+        let mut approval =
+            json!({"manifest":manifest,"source":"builtin","enabled":true,"paths":["/tmp/example"]});
+        assert!(migrate_builtin(&mut approval));
+        assert_eq!(approval["manifest"]["kind"], "app");
+        assert_eq!(approval["manifest"]["permissions"], permissions);
+        assert_eq!(approval["enabled"], true);
+        assert_eq!(approval["paths"], json!(["/tmp/example"]));
+        assert!(!migrate_builtin(&mut approval));
+    }
+    #[test]
+    fn imported_packages_cannot_gain_builtin_application_classification() {
+        let mut approval =
+            json!({"manifest":{"id":"com.termone.sftp"},"source":"local","enabled":true});
+        assert!(!migrate_builtin(&mut approval));
+        assert!(approval["manifest"]["kind"].is_null());
+    }
+    #[test]
+    fn capabilities_are_bound_to_extension_kind_and_own_window() {
+        use term_core::plugin::ExtensionKind::{App, Plugin};
+        let id = "com.termone.sftp";
+        assert!(context_allowed(App, &crate::applications::label(id), id));
+        assert!(!context_allowed(App, "main", id));
+        assert!(!context_allowed(
+            App,
+            &crate::applications::label("com.termone.ai-assist"),
+            id
+        ));
+        assert!(context_allowed(Plugin, "main", "org.example.plugin"));
+        assert!(!context_allowed(
+            Plugin,
+            &crate::applications::label(id),
+            "org.example.plugin"
+        ));
+    }
     #[test]
     fn plugin_native_calls_are_bounded_and_slots_are_released() {
         let id = "org.example.concurrent-test";
@@ -427,7 +524,8 @@ pub fn plugin_read_package(path: String) -> Result<Value> {
     }
 }
 #[tauri::command]
-pub fn plugin_load(app: AppHandle, id: String) -> Result<Value> {
+pub fn plugin_load(app: AppHandle, window: WebviewWindow, id: String) -> Result<Value> {
+    ensure_context(&app, &window, &id)?;
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
     if v["source"] == "builtin" {
@@ -446,10 +544,10 @@ pub fn plugin_load(app: AppHandle, id: String) -> Result<Value> {
     walk(&dir, "", &mut files, &mut 0)?;
     // A changed manifest requires another install/permission approval; hot reload cannot escalate.
     if v["source"] == "dev" {
-        let raw = files.get("termone.plugin.json").ok_or("缺少插件清单")?;
+        let raw = files.get("termone.plugin.json").ok_or("缺少扩展清单")?;
         let current: Value = serde_json::from_slice(&B64.decode(raw).map_err(err)?).map_err(err)?;
         if current != v["manifest"] {
-            return Err("开发插件权限或清单已改变，请重新导入并确认".into());
+            return Err("开发扩展权限或清单已改变，请重新导入并确认".into());
         }
     }
     let code = String::from_utf8(
@@ -473,10 +571,12 @@ pub fn plugin_audit(app: AppHandle) -> Result<Vec<Value>> {
 #[tauri::command]
 pub fn plugin_authorize(
     app: AppHandle,
+    window: WebviewWindow,
     id: String,
     permission: PluginPermission,
     action: String,
 ) -> Result<()> {
+    ensure_context(&app, &window, &id)?;
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
     let allowed = m.permissions.contains(&permission);
@@ -484,23 +584,25 @@ pub fn plugin_authorize(
     if allowed {
         Ok(())
     } else {
-        Err(format!("插件未获授权: {action}"))
+        Err(format!("扩展未获授权: {action}"))
     }
 }
 
 #[tauri::command]
 pub async fn plugin_call(
     app: AppHandle,
+    window: WebviewWindow,
     id: String,
     command: String,
     args: Value,
 ) -> Result<Value> {
+    ensure_context(&app, &window, &id)?;
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
     let allowed = IPC.contains(&command.as_str()) && m.allows_ipc(&command);
     audit(&app, &id, &command, allowed);
     if !allowed {
-        return Err(format!("插件无权调用: {command}"));
+        return Err(format!("扩展无权调用: {command}"));
     }
     let guard = CallGuard::acquire(&id).map_err(|e| {
         audit(&app, &id, "concurrency-denied", false);
@@ -601,16 +703,22 @@ fn granted_path(app: &AppHandle, id: &str, raw: &str, write: bool) -> Result<Pat
     Ok(path)
 }
 #[tauri::command]
-pub fn plugin_grant_path(app: AppHandle, id: String, path: String) -> Result<()> {
+pub fn plugin_grant_path(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: String,
+    path: String,
+) -> Result<()> {
+    ensure_context(&app, &window, &id)?;
     let mut local = approved(&app, &id, true)?;
     let manifest = parse(&local["manifest"])?;
     if !manifest.permissions.contains(&PluginPermission::DialogOpen) {
-        return Err("插件没有文件选择权限".into());
+        return Err("扩展没有文件选择权限".into());
     }
     let p = canonical_path(&path, false)?;
     if protected_path(&app, &p)? {
         audit(&app, &id, "filesystem-denied", false);
-        return Err("密钥和应用私有目录不能授权给插件".into());
+        return Err("密钥和应用私有目录不能授权给扩展".into());
     }
     let mut paths: Vec<String> = serde_json::from_value(local["paths"].clone()).unwrap_or_default();
     let text = p.to_string_lossy().into_owned();
@@ -794,7 +902,7 @@ fn dispatch(app: &AppHandle, id: &str, cmd: &str, args: Value) -> Result<Value> 
             .map_err(err)?;
             Ok(Value::Null)
         }
-        _ => Err("不支持的插件命令".into()),
+        _ => Err("不支持的扩展命令".into()),
     }
 }
 
@@ -828,23 +936,27 @@ pub fn plugin_add_domain(
             .plugin_save(row)
             .map_err(err)?;
     }
+    crate::applications::close(&app, &id);
     audit(&app, &id, "grant-domain", true);
+    changed(&app, &id);
     Ok(())
 }
 
 #[tauri::command]
 pub fn plugin_storage(
     app: AppHandle,
+    window: WebviewWindow,
     id: String,
     key: String,
     value: Option<Value>,
     remove: bool,
 ) -> Result<Value> {
+    ensure_context(&app, &window, &id)?;
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
     if !m.permissions.contains(&PluginPermission::Storage) {
         audit(&app, &id, "storage", false);
-        return Err("未授权插件存储".into());
+        return Err("未授权扩展存储".into());
     }
     if key.is_empty()
         || key.len() > 100
@@ -886,7 +998,7 @@ pub fn plugin_storage(
             || total.saturating_sub(fs::metadata(&p).map(|m| m.len()).unwrap_or(0)) + size as u64
                 > 8 * 1024 * 1024
         {
-            return Err("插件存储配额为 64 项 / 8 MiB".into());
+            return Err("扩展存储配额为 64 项 / 8 MiB".into());
         }
         write_json(&p, &value)?;
         Ok(Value::Null)

@@ -6,7 +6,9 @@ export interface Permission {
   command?: string;
   domain?: string;
 }
+export type ExtensionKind = "plugin" | "app";
 export interface Manifest {
+  kind?: ExtensionKind;
   id: string;
   name: string;
   description: string;

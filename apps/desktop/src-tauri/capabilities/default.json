@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "TermOne 主窗口默认权限",
-  "windows": ["main"],
+  "description": "TermOne 主窗口和独立应用窗口的本地 UI 权限",
+  "windows": [
+    "main",
+    "application-*"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
