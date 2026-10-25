@@ -5,7 +5,6 @@ import { ipc } from "./ipc";
 import { applyCustomColors, setCustomTheme } from "./themes";
 import { ensureSessionEvents } from "./sessionEvents";
 import { retryDelay } from "./reconnection";
-import { saveLayouts, readLayouts, type SavedNode } from "./workspaceLayout";
 import {
   allLeaves,
   findPane,
@@ -103,8 +102,6 @@ interface TermStore {
   reconnectPane(paneId: string, manual?: boolean): Promise<void>;
   stopReconnect(paneId: string): void;
   openInPane(paneId: string, profileId: string | null): Promise<void>;
-  saveWorkspace(): Promise<void>;
-  restoreWorkspace(): Promise<void>;
   setDialog(dialog: DialogState): void;
   showToast(msg: string, kind?: Toast["kind"]): void;
   dismissToast(id: number): void;
@@ -328,9 +325,6 @@ export const useStore = create<TermStore>()((set, get) => ({
     const next = { ...DEFAULT_SETTINGS };
     for (const row of rows) {
       switch (row.key) {
-        case "savedWorkspace":
-          next.savedWorkspace = row.value;
-          break;
         case "customTheme":
           next.customTheme = row.value;
           break;
@@ -709,57 +703,6 @@ export const useStore = create<TermStore>()((set, get) => ({
       get().showToast(String(e), "error");
     } finally {
       connecting.delete(paneId);
-    }
-  },
-
-  saveWorkspace: async () => {
-    await get().saveSetting("savedWorkspace", saveLayouts(get().tabs));
-    get().showToast("布局已保存，可在欢迎页恢复", "success");
-  },
-  restoreWorkspace: async () => {
-    try {
-      const saved = readLayouts(get().settings.savedWorkspace);
-      const restore = async (
-        node: SavedNode,
-      ): Promise<import("./types").PaneNode> => {
-        if (node.type === "split") {
-          const children = [];
-          for (const child of node.children)
-            children.push(await restore(child));
-          return { ...node, id: crypto.randomUUID(), children };
-        }
-        if (node.kind === "welcome")
-          return leafNode(newPane({ kind: "welcome", title: "欢迎" }));
-        const profile = get().profiles.find((p) => p.id === node.profileId);
-        if ((node.profileId && !profile) || (node.kind !== "local" && !profile))
-          return leafNode(newPane({ title: "请选择档案" }));
-        try {
-          const info = await openSession(profile);
-          return leafNode(
-            newPane({
-              kind: info.kind,
-              profileId: profile?.id ?? null,
-              sessionId: info.id,
-              sessionTitle: info.title,
-              title: profile?.name ?? info.title,
-            }),
-          );
-        } catch (e) {
-          get().showToast(String(e), "error");
-          return leafNode(newPane({ title: profile?.name ?? "连接失败" }));
-        }
-      };
-      const tabs: Tab[] = [];
-      for (const node of saved)
-        tabs.push({ id: crypto.randomUUID(), layout: await restore(node) });
-      if (tabs.length)
-        set((s) => ({
-          tabs: [...s.tabs.filter((t) => t.id !== "welcome"), ...tabs],
-          activeTabId: tabs[0].id,
-          activePaneId: allLeaves(tabs[0].layout)[0]?.id ?? null,
-        }));
-    } catch (e) {
-      get().showToast("恢复布局失败: " + String(e), "error");
     }
   },
 

@@ -7,7 +7,6 @@ export function WelcomePane() {
   const openTerminal = useStore((s) => s.openTerminal);
   const setDialog = useStore((s) => s.setDialog);
   const [recent, setRecent] = useState<ProfileRow[]>([]);
-  const saved = useStore(s => s.settings.savedWorkspace);
   useEffect(() => { void ipc.profileRecent().then(setRecent).catch(() => {}); }, []);
 
   return (
@@ -35,7 +34,6 @@ export function WelcomePane() {
         </div>
       </div>
       <p className="welcome-note">终端内 Ctrl+W（删词）、Ctrl+T 等编辑键由 Shell 正常处理</p>
-      {saved && <button className="btn" onClick={() => void useStore.getState().restoreWorkspace()}>恢复已保存布局</button>}
       {recent.length > 0 && <div className="recent-sessions"><h3>最近连接</h3>{recent.map(p => <button key={p.id} className="btn small" onClick={() => void openTerminal(p.id)}>{p.name}</button>)}</div>}
     </div>
   );

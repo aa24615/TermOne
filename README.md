@@ -224,7 +224,7 @@ cargo test --workspace --release --locked
 
 ## Roadmap
 
-2026-10-24 已补齐 R-01～R-17、R-20 的本期实现，R-21 Web SSH 保留并回归验证。包含扩展运行时与 6 个官方插件、3 个独立应用、分组拖动、最近会话、布局恢复、有限自动重连、E2EE 锁定保护和 Linux 打包。详见 [需求覆盖与验证记录](./docs/requirement-coverage.md)，其中明确列出尚缺的性能量测和跨设备验收证据。
+2026-10-24 已补齐 R-01～R-17、R-20 的本期实现，R-21 Web SSH 保留并回归验证。包含扩展运行时与 6 个官方插件、3 个独立应用、分组拖动、最近会话、有限自动重连、E2EE 锁定保护和 Linux 打包。详见 [需求覆盖与验证记录](./docs/requirement-coverage.md)，其中明确列出尚缺的性能量测和跨设备验收证据。
 
 R-18 移动端、R-19 内置重型 IDE 按需求不做；SSH/SFTP 继续复用系统 OpenSSH。公共 registry 服务未部署，客户端支持自托管索引和离线分发。
 

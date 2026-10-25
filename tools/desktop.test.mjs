@@ -13,10 +13,6 @@ import {
   verifyDigest,
 } from "../apps/desktop/src/plugin/package.ts";
 import { retryDelay } from "../apps/desktop/src/reconnection.ts";
-import {
-  saveLayouts,
-  readLayouts,
-} from "../apps/desktop/src/workspaceLayout.ts";
 import { leafNode, newPane } from "../apps/desktop/src/paneTree.ts";
 import { useStore } from "../apps/desktop/src/store.ts";
 import { createHost } from "../apps/desktop/src/plugin/hostApi.ts";
@@ -281,34 +277,6 @@ test("Reconnect is bounded with exponential backoff", () => {
   assert.equal(retryDelay(5, 5, 5), null);
   assert.equal(retryDelay(-1, 5, 5), null);
 });
-test("Saved layouts preserve splits without serializing session IDs or secrets", () => {
-  const pane = newPane({
-    kind: "ssh",
-    profileId: "host",
-    sessionId: "private-session-id",
-    title: "user@host",
-  });
-  const raw = saveLayouts([
-    {
-      id: "tab",
-      layout: {
-        type: "split",
-        id: "s",
-        dir: "row",
-        sizes: [1, 2],
-        children: [leafNode(pane), leafNode(newPane({ kind: "local" }))],
-      },
-    },
-  ]);
-  assert.ok(!raw.includes("private-session-id"));
-  assert.deepEqual(readLayouts(raw)[0].sizes, [1, 2]);
-  assert.throws(() =>
-    readLayouts(
-      '{"version":1,"tabs":[{"type":"split","dir":"row","sizes":[-1,1],"children":[]}]}',
-    ),
-  );
-});
-
 test("Plugin disposal removes contributions, output subscriptions and pending confirmation", async () => {
   const { useRegistry } = await import(
     "../apps/desktop/src/plugin/registry.ts"
@@ -419,26 +387,6 @@ test("Normal SSH exit statuses do not reconnect, transport failure is scheduled 
   useStore.getState().stopReconnect(pane.id);
   assert.match(useStore.getState().tabs[0].layout.pane.exitInfo, /已停止/);
 });
-test("Splitting the welcome tab still preserves its layout for restore", () => {
-  const raw = saveLayouts([
-    {
-      id: "welcome",
-      layout: {
-        type: "split",
-        id: "s",
-        dir: "row",
-        sizes: [1, 1],
-        children: [
-          leafNode(newPane({ kind: "welcome" })),
-          leafNode(newPane({ kind: "local" })),
-        ],
-      },
-    },
-  ]);
-  assert.equal(readLayouts(raw).length, 1);
-  assert.equal(readLayouts(raw)[0].children[0].kind, "welcome");
-});
-
 test("Applications declare a compatible API and cannot request terminal hooks", () => {
   const app = {
     ...manifest,

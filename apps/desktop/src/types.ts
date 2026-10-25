@@ -203,7 +203,6 @@ export interface Tab {
 }
 
 export interface AppSettings {
-  savedWorkspace: string;
   customTheme: string;
   reconnectEnabled: boolean;
   reconnectDelaySeconds: number;
@@ -221,7 +220,6 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  savedWorkspace: "",
   customTheme: "",
   reconnectEnabled: true,
   reconnectDelaySeconds: 5,
