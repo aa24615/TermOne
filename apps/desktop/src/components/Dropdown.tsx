@@ -50,12 +50,15 @@ export function Dropdown({ value, options, onChange, placeholder, disabled, clas
       });
     };
     place();
+    const observer = new ResizeObserver(place);
+    if (buttonRef.current) observer.observe(buttonRef.current);
     const onScroll = (event: Event) => {
       if (!listRef.current?.contains(event.target as Node)) place();
     };
     window.addEventListener("resize", place);
     window.addEventListener("scroll", onScroll, true);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", onScroll, true);
     };

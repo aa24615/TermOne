@@ -1,7 +1,7 @@
 {
   "name": "termone",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.7",
   "description": "TermOne —— 轻量、漂亮的跨平台终端（Windows / macOS）",
   "workspaces": [
     "apps/desktop",

@@ -4,13 +4,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AboutDialog } from "./components/AboutDialog";
 import { AccountDialog } from "./components/AccountDialog";
 import { Dialogs, Modal } from "./components/Dialog";
-import { PluginSurface } from "./plugin/PluginSurface";
+import { ResizableWorkspace } from "./components/ResizableWorkspace";
 import { initPlugins } from "./plugin/runtime";
 import { matchesShortcut, useRegistry } from "./plugin/registry";
 import { CommandsDialog } from "./components/CommandsDialog";
 import { ProfileDialog } from "./components/ProfileDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
 import { Toasts } from "./components/Toasts";
@@ -149,8 +148,7 @@ export default function App() {
   return (
     <div className="app">
       <TitleBar />
-      <div className="app-body">
-        <Sidebar />
+      <ResizableWorkspace>
         <main className="main">
           <TabBar />
           <div className="term-stack">
@@ -165,8 +163,7 @@ export default function App() {
           </div>
           <StatusBar />
         </main>
-        <PluginSurface />
-      </div>
+      </ResizableWorkspace>
 
       {dialog?.type === "profile" && (
         <ProfileDialog profileId={dialog.profileId} />
