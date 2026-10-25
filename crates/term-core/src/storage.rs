@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, TermError};
+use crate::history::{search_history, HistoryEntry, HistoryQuery};
 
 pub fn default_db_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("TERMONE_DATA_DIR").map(PathBuf::from).filter(|p| p.is_absolute()) {
@@ -218,6 +219,14 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS command_history (
+    id           TEXT PRIMARY KEY,
+    command      TEXT NOT NULL,
+    host_id      TEXT,
+    use_count    INTEGER NOT NULL DEFAULT 1,
+    last_used_at INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL
+);
 "#;
 
 /// 为存量数据库补充新列（兼容旧版本 termone.db）。
@@ -415,6 +424,95 @@ impl Db {
         });
         recent.truncate(limit as usize);
         Ok(recent)
+    }
+
+    // ---------------- 命令历史（本地，不参与 LWW 同步 / 备份） ----------------
+    // 命令历史属于「本机使用痕迹」，且体量可能很大，故仅本地存储；
+    // 检索的匹配 / 排序 / 按主机隔离逻辑全部委托给纯函数 `search_history`。
+
+    /// 记录一次命令执行。相同 (command, host_id) 命中时累加使用次数并刷新最近时间戳；
+    /// 否则新建一条记录。本地命令的 `host_id` 传 `None`。
+    pub fn history_add(&self, command: &str, host_id: Option<&str>) -> Result<()> {
+        let now = now_ms();
+        let conn = self.conn.lock().unwrap();
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM command_history WHERE command = ?1 AND coalesce(host_id,'') = coalesce(?2,'')",
+                params![command, host_id],
+                |r| r.get(0),
+            )
+            .map_err(TermError::Db)?;
+        if existing > 0 {
+            conn.execute(
+                "UPDATE command_history SET use_count = use_count + 1, last_used_at = ?3 \
+                 WHERE command = ?1 AND coalesce(host_id,'') = coalesce(?2,'')",
+                params![command, host_id, now],
+            )
+            .map_err(TermError::Db)?;
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO command_history (id, command, host_id, use_count, last_used_at, created_at) \
+                 VALUES (?1, ?2, ?3, 1, ?4, ?4)",
+                params![id, command, host_id, now],
+            )
+            .map_err(TermError::Db)?;
+        }
+        Ok(())
+    }
+
+    /// 载入全部历史记录（按最近使用降序）。
+    fn history_load_all(&self) -> Result<Vec<HistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT command, host_id, use_count, last_used_at \
+                 FROM command_history ORDER BY last_used_at DESC",
+            )
+            .map_err(TermError::Db)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(HistoryEntry {
+                    command: r.get(0)?,
+                    host_id: r.get(1)?,
+                    use_count: r.get(2)?,
+                    timestamp: r.get(3)?,
+                })
+            })
+            .map_err(TermError::Db)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(TermError::Db)
+    }
+
+    /// 返回最近的历史记录（最多 `limit` 条，全局，不含主机过滤）。
+    pub fn history_list(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
+        Ok(self.history_load_all()?.into_iter().take(limit as usize).collect())
+    }
+
+    /// 检索命令历史：加载全部后委托纯函数 `search_history` 做匹配 / 排序 / 主机隔离。
+    pub fn history_search(
+        &self,
+        query: &str,
+        host_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>> {
+        let all = self.history_load_all()?;
+        Ok(search_history(
+            query,
+            &all,
+            &HistoryQuery {
+                host_filter: host_filter.map(String::from),
+                max_results: limit,
+                case_sensitive: false,
+            },
+        ))
+    }
+
+    /// 清空全部命令历史。
+    pub fn history_clear(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM command_history", [])
+            .map_err(TermError::Db)?;
+        Ok(())
     }
 
     fn profile_exists(&self, id: &str) -> bool {
@@ -2178,5 +2276,72 @@ mod tests {
         // 相同时间戳再次下发：不应覆盖
         assert_eq!(db.sync_apply_pull(&[item]).unwrap(), 0);
         assert_eq!(db.profile_list().unwrap()[0].name, "remote");
+    }
+
+    // ---------------- 命令历史（R-24 / R-38） ----------------
+    #[test]
+    fn history_add_inserts_then_increments_count_on_repeat() {
+        let db = tmp_db();
+        db.history_add("ls -la", None).unwrap();
+        db.history_add("ls -la", None).unwrap();
+        let list = db.history_list(10).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].command, "ls -la");
+        assert_eq!(list[0].use_count, 2);
+        assert!(list[0].host_id.is_none());
+    }
+
+    #[test]
+    fn history_search_ranks_prefix_above_substring_and_isolates_host() {
+        let db = tmp_db();
+        db.history_add("git status", Some("h1")).unwrap();
+        db.history_add("debug tool", Some("h1")).unwrap();
+        db.history_add("git status", Some("h2")).unwrap();
+        db.history_add("clear", None).unwrap();
+
+        // 主机 h1 内检索 "git"：命中 git status（前缀）+ clear（本地），不应含 h2 的 git status
+        let r = db.history_search("git", Some("h1"), 10).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].command, "git status");
+        assert_eq!(r[0].host_id.as_deref(), Some("h1"));
+
+        // 全局检索 "git"：h1 与 h2 的 git status 聚合为两条
+        let all = db.history_search("git", None, 10).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // 主机 h2 检索 "a"：仅 h2 的 git status + 本地 clear
+        let h2 = db.history_search("a", Some("h2"), 10).unwrap();
+        assert_eq!(h2.len(), 2);
+        assert!(h2.iter().any(|e| e.host_id.as_deref() == Some("h2")));
+        assert!(h2.iter().any(|e| e.host_id.is_none()));
+    }
+
+    #[test]
+    fn history_search_empty_query_returns_recent_first() {
+        let db = tmp_db();
+        db.history_add("ls", None).unwrap();
+        db.history_add("git pull", None).unwrap();
+        let r = db.history_search("", None, 10).unwrap();
+        assert_eq!(r.len(), 2);
+        // 最近添加（git pull）排在前
+        assert_eq!(r[0].command, "git pull");
+    }
+
+    #[test]
+    fn history_clear_empties_store() {
+        let db = tmp_db();
+        db.history_add("ls", None).unwrap();
+        assert_eq!(db.history_list(10).unwrap().len(), 1);
+        db.history_clear().unwrap();
+        assert_eq!(db.history_list(10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn history_is_local_only_not_in_sync_export() {
+        // 命令历史不应进入 LWW 同步导出，避免污染跨设备同步
+        let db = tmp_db();
+        db.history_add("secret-cmd", Some("h9")).unwrap();
+        let dirty = db.sync_export_dirty().unwrap();
+        assert!(!dirty.iter().any(|i| i.kind == "command_history"));
     }
 }

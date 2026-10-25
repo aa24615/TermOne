@@ -33,11 +33,22 @@
 - 分类是启发式提醒，不能解析完整 shell、别名、动态变量和远端程序状态；不作为权限隔离或任意脚本安全保证。协议字节、终端响应和已单独授权的插件自动化保持各自输入路径。本项验证范围为桌面端。
 
 
+**R-24 应用级命令面板 / 历史命令搜索 + R-38 按主机命令历史隔离检索（核心逻辑层）**：
+
+- 新增 `crates/term-core/src/history.rs`：纯函数 `search_history`（匹配 / 排序 / 按主机隔离）+ `matches_query`（字面子串匹配）。
+- 排序分数：完全相等(100) > 前缀匹配(70) > 词边界匹配(50) > 子串匹配(30)；同分按 使用次数 → 最近使用 → 命令字典序 稳定排序。
+- 主机隔离（`R-38`）：`host_filter = Some(id)` 仅返回该主机命令 + 本地命令（`host_id` 为 None），严格不把主机 A 的历史泄露到主机 B；`None` 为全局检索。
+- 字面匹配：查询按字面子串匹配（默认大小写不敏感），正则元字符（`.` `*` `(` 等）按字面处理，避免误报与 panic（P4）。
+- 聚合去重：相同命令（大小写不敏感）同主机合并为一条，累加 `use_count`、取最新 `timestamp`；区分大小写模式下保留原大小写。
+- `storage.rs` 新增本地 `command_history` 表（不参与 LWW 同步 / 备份，避免污染跨设备同步）及 `history_add` / `history_list` / `history_search` / `history_clear`；`history_search` 委托纯函数完成检索。
+- **27 项 P0–P5 单测**（history.rs 22 + storage.rs 5）：P0 正常路径 / P1 核心匹配与排序 / P2 边界（空列表、无匹配、单行、空白查询、max_results=0） / P3 组合与按主机隔离（A 专属命令不泄露到 B、同机去重、大小写不敏感去重、不同主机不合并） / P4 防误报（正则元字符字面、特殊字符、Unicode、区分大小写） / P5 极端回归（5000 条性能与聚合、超长命令、100 主机隔离、CRLF）。
+- `lib.rs` 导出 `HistoryEntry` / `HistoryQuery` / `search_history` / `matches_query`。
+
 **R-18 移动端、R-19 重型 IDE 按需求 Won’t 保留不做。**
 
 ## 自动化证据
 
-- `cargo test --workspace --release --locked`：**90 项 term-core + 10 项原生命令测试通过**（R-26 分类器共 36 项；原生入口增加输入大小边界测试）。涵盖存储/LWW/备份、分组/最近/Snippets、重连策略、命令安全分类（多行粘贴 + 危险命令）、manifest/ZIP 路径/权限/密钥环拒绝、官方 catalog、目录 symlink 拒绝、E2EE 本机策略不被同步覆盖。
+- `cargo test --workspace --release --locked`：**121 项 term-core 测试通过**（R-24/R-38 命令历史检索 27 项 + R-26 分类器 36 项 + 存储/LWW/备份/分组/最近/Snippets/重连策略/manifest/ZIP 路径/权限/密钥环拒绝/官方 catalog/目录 symlink 拒绝/E2EE 本机策略不被同步覆盖等；原生命令 10 项）。R-24/R-38 单测覆盖 P0–P5：匹配/排序/按主机隔离/字面正则/超长与大数据集回归。
 - `npm run check`：桌面端、服务端、Web 三个工作区 TypeScript 通过。
 - `npm run test:desktop`：**34 项通过**。新增 4 项打包版本流程测试（连续递增、配置与锁文件同步、指定发布版本、防止回退及不一致配置拒绝），保留 5 项扩展类型/API/窗口路由与会话隔离测试，保留 13 项输入门禁测试（粘贴取消/确认、前缀合并、回车、编辑与历史记录、异步乱序、会话销毁、检查失败、控制字符和大小限制）；既有真实 Web Crypto 随机化、中文、错误口令、篡改；锁定/解密失败不推送不推进游标；密文同步；ZIP/HTTPS/digest；资源撤销与确认框取消；第三方本地写入拒绝；重连次数；拉取期间切换账号不应用/不推送原账号数据；正常退出不重连、传输失败可停止。
 - `node tools/zmodem-smoke.mjs`：**1 MiB 全字节二进制 offer/accept/send/receive/close 回环及内容一致性通过**。据此修复库 `accept()` 返回值使用错误。
