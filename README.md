@@ -82,6 +82,12 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 
 ## 发版与打包（CNB 流水线）
 
+本地打包统一使用 `npm run tauri -- build`，或 `npm run tauri --workspace @termone/desktop -- build --bundles app,dmg`。每次打包前自动递增补丁版本（如 `0.1.0 → 0.1.1 → 0.1.2`），同步 Tauri、桌面 npm 包、Cargo workspace 与锁文件；安装包文件名、关于页面和状态栏使用同一版本。开发预览、前端构建、类型检查与 `build --help` 不递增。
+
+版本在编译前写入源码，打包失败也不回退，下次重试继续递增。打包完成后将版本文件一并提交，确保下次构建从最新版本继续。不要直接运行 `npx tauri build` 绕过项目入口；`tauri bundle` 会提示改用 `build`，避免旧二进制被重新包装。
+
+CI 通过 `TERMONE_RELEASE_VERSION` 使用按钮指定的发布版本（可带 `v` 前缀，不能低于源码版本），同一次 Release 的 Windows、macOS、Linux 产物保持相同版本；此指定方式覆盖自动补丁递增。服务端、Web 和扩展包各自的版本独立管理。
+
 **客户端发版由按钮触发**：打开仓库 `main` 分支详情页 → 点击「发版 Release（客户端）」按钮 →
 输入版本号（如 `0.1.0`）确认即可。流水线会自动：
 

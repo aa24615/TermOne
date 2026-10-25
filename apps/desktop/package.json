@@ -1,14 +1,14 @@
 {
   "name": "@termone/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node ../../scripts/tauri.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",

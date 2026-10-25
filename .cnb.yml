@@ -56,7 +56,9 @@ main:
         - name: install deps
           script: npm ci --no-audit --no-fund
         - name: build bundles
-          script: npm run tauri build
+          script: |
+            $env:TERMONE_RELEASE_VERSION = $env:VERSION
+            npm run tauri -- build
         - name: upload to release
           script: |
             $env:RELEASE_TAG = "v$env:VERSION"
@@ -74,7 +76,7 @@ main:
         - name: install deps
           script: npm ci --no-audit --no-fund
         - name: build bundles
-          script: npm run tauri build
+          script: TERMONE_RELEASE_VERSION="${VERSION}" npm run tauri -- build
         - name: upload to release
           script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs target/release/bundle
 
@@ -91,7 +93,7 @@ main:
             npm ci --no-audit --no-fund
             npm run check
             npm run test:desktop
-            npm run tauri --workspace @termone/desktop -- build --bundles deb,rpm,appimage
+            TERMONE_RELEASE_VERSION="${VERSION}" npm run tauri --workspace @termone/desktop -- build --bundles deb,rpm,appimage
             cargo test --workspace --release --locked
         - name: upload Linux bundles
           script: RELEASE_TAG="v${VERSION}" node scripts/upload-release-assets.mjs target/release/bundle
