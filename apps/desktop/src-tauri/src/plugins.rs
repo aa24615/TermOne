@@ -110,11 +110,14 @@ fn write_json(p: &Path, v: &Value) -> Result<()> {
 }
 pub(crate) fn approved(app: &AppHandle, id: &str, enabled: bool) -> Result<Value> {
     let local = read_json(&path(app, id)?.join("approval.json"))?;
-    if enabled && local["enabled"] != true {
+    let manifest = parse(&local["manifest"])?;
+    if enabled && !can_run(manifest.kind, local["enabled"] == true) {
         return Err("扩展未启用".into());
     }
-    parse(&local["manifest"])?;
     Ok(local)
+}
+fn can_run(kind: term_core::plugin::ExtensionKind, enabled: bool) -> bool {
+    kind == term_core::plugin::ExtensionKind::App || enabled
 }
 fn audit(app: &AppHandle, id: &str, action: &str, allowed: bool) {
     let Ok(_guard) = AUDIT_LOCK.lock() else {
@@ -214,7 +217,7 @@ pub fn plugin_list(app: AppHandle) -> Result<Vec<Installed>> {
                     out.push(Installed {
                         id: m.id,
                         manifest: v["manifest"].clone(),
-                        enabled: v["enabled"] == true,
+                        enabled: can_run(m.kind, v["enabled"] == true),
                         source: v["source"].as_str().unwrap_or("local").into(),
                     });
                 }
@@ -286,7 +289,7 @@ pub fn plugin_install(
         }
         write_json(
             &stage.join("approval.json"),
-            &json!({"manifest":manifest,"enabled":false,"source":source}),
+            &json!({"manifest":manifest,"enabled":m.kind == term_core::plugin::ExtensionKind::App,"source":source}),
         )?;
         if source == "dev" {
             let p = PathBuf::from(dev_path.ok_or("开发目录未选择")?)
@@ -346,6 +349,9 @@ pub fn plugin_set_enabled(
     enabled: bool,
 ) -> Result<()> {
     let mut v = approved(&app, &id, false)?;
+    if parse(&v["manifest"])?.kind == term_core::plugin::ExtensionKind::App {
+        return Err("应用安装后即可使用，无需启用或停用".into());
+    }
     v["enabled"] = json!(enabled);
     if !enabled {
         crate::applications::close(&app, &id);
@@ -423,6 +429,14 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installed_apps_ignore_legacy_enable_flags_but_plugins_still_require_enable() {
+        use term_core::plugin::ExtensionKind::{App, Plugin};
+        assert!(can_run(App, false));
+        assert!(can_run(App, true));
+        assert!(!can_run(Plugin, false));
+        assert!(can_run(Plugin, true));
+    }
     #[test]
     fn legacy_builtin_application_migrates_without_changing_approval() {
         let mut manifest: Value = serde_json::from_str::<Vec<Value>>(CATALOG)
@@ -923,12 +937,13 @@ pub fn plugin_add_domain(
         manifest.permissions.push(permission);
     }
     value["manifest"]["permissions"] = json!(manifest.permissions);
-    value["enabled"] = json!(false);
+    let application = manifest.kind == term_core::plugin::ExtensionKind::App;
+    value["enabled"] = json!(application);
     write_json(&path(&app, &id)?.join("approval.json"), &value)?;
     let row = { state.db.lock().map_err(err)?.plugin_get(&id).map_err(err)? };
     if let Some(mut row) = row {
         row.manifest = value["manifest"].to_string();
-        row.state = "disabled".into();
+        row.state = if application { "installed" } else { "disabled" }.into();
         state
             .db
             .lock()

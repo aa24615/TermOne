@@ -458,7 +458,7 @@ test("Applications declare a compatible API and cannot request terminal hooks", 
   ])
     assert.throws(() => validateManifest({ ...app, permissions: [{ type }] }));
 });
-test("Legacy official SFTP opens a native application without activating a main-window panel", async () => {
+test("Legacy disabled SFTP opens directly without enabling or activating a main-window panel", async () => {
   const { usePlugins, openPlugin } = await import(
     "../apps/desktop/src/plugin/runtime.ts"
   );
@@ -468,7 +468,7 @@ test("Legacy official SFTP opens a native application without activating a main-
   );
   const m = { ...catalog.find((p) => p.id === "com.termone.sftp") };
   delete m.kind;
-  const item = { id: m.id, manifest: m, source: "builtin", enabled: true };
+  const item = { id: m.id, manifest: m, source: "builtin", enabled: false };
   usePlugins.setState({ installed: [item], selected: null, active: {} });
   const calls = [];
   let finish;
@@ -484,6 +484,23 @@ test("Legacy official SFTP opens a native application without activating a main-
   await Promise.all([first, second]);
   assert.equal(usePlugins.getState().selected, null);
   assert.deepEqual(usePlugins.getState().active, {});
+});
+test("Applications need no enable toggle while disabled plugins still cannot open", async () => {
+  const { usePlugins, openPlugin, togglePlugin } = await import("../apps/desktop/src/plugin/runtime.ts");
+  const { canOpenExtension } = await import("../apps/desktop/src/plugin/kinds.ts");
+  const plugin = { id: manifest.id, manifest, source: "local", enabled: false };
+  const app = { ...plugin, id: "org.example.app", manifest: { ...manifest, id: "org.example.app", kind: "app" } };
+  assert.equal(canOpenExtension(plugin), false);
+  assert.equal(canOpenExtension(app), true);
+  const calls = [];
+  mockIPC((cmd) => { calls.push(cmd); });
+  usePlugins.setState({ installed: [plugin, app], selected: null, active: {} });
+  await openPlugin(plugin.id);
+  assert.equal(usePlugins.getState().selected, null);
+  await assert.rejects(togglePlugin(app), /安装后即可使用/);
+  assert.deepEqual(calls, []);
+  await openPlugin(app.id);
+  assert.deepEqual(calls, ["application_open"]);
 });
 test("Application Host exposes no main sessions or terminal write path", async () => {
   const calls = [];

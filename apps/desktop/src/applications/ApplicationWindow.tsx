@@ -46,9 +46,9 @@ export default function ApplicationWindow() {
       }
       const p = usePlugins
         .getState()
-        .installed.find((p) => p.id === id && p.enabled);
+        .installed.find((p) => p.id === id);
       if (!p || installedKind(p) !== "app")
-        throw new Error("应用未安装、已停用或类型不符");
+        throw new Error("应用未安装或类型不符");
       if (isTauri())
         unlisten = await getCurrentWindow().onCloseRequested(() =>
           stopPlugin(p.id),
@@ -132,7 +132,7 @@ export default function ApplicationWindow() {
           <p role="alert" className="error">
             {error}
           </p>
-        ) : id && item?.enabled ? (
+        ) : id && item ? (
           <ExtensionContent id={id} label="应用" />
         ) : (
           <p>正在加载应用…</p>

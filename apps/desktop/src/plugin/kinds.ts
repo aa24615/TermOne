@@ -11,6 +11,9 @@ export function installedKind(item: Installed): ExtensionKind {
 export function kindName(kind: ExtensionKind) {
   return kind === "app" ? "应用" : "插件";
 }
+export function canOpenExtension(item: Installed): boolean {
+  return installedKind(item) === "app" || item.enabled;
+}
 export function applicationIdFromLocation(): string | null {
   return typeof window !== "undefined" && window.location
     ? new URLSearchParams(window.location.search).get("application")

@@ -26,7 +26,7 @@ export function createHost(plugin: Installed): Host {
     };
   };
   const assert = (permission: Permission) => {
-    if (controller.signal.aborted) throw new Error("扩展已停用");
+    if (controller.signal.aborted) throw new Error("扩展运行已结束");
     if (
       application &&
       [
@@ -243,7 +243,7 @@ export function createHost(plugin: Installed): Host {
       });
     },
     setInterval(fn, ms) {
-      if (controller.signal.aborted) throw new Error("扩展已停用");
+      if (controller.signal.aborted) throw new Error("扩展运行已结束");
       const timer = setInterval(
         () => {
           try {

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { applicationIdFromLocation, installedKind } from "./kinds";
+import { applicationIdFromLocation, installedKind, canOpenExtension } from "./kinds";
 import { create } from "zustand";
 import { isTauri } from "../env";
 import { useStore } from "../store";
@@ -50,7 +50,7 @@ export async function refreshPlugins() {
   if (!isTauri()) return;
   const installed = await invoke<Installed[]>("plugin_list");
   for (const id of Object.keys(usePlugins.getState().active)) {
-    const next = installed.find((p) => p.id === id && p.enabled);
+    const next = installed.find((p) => p.id === id && canOpenExtension(p));
     const previous = usePlugins.getState().installed.find((p) => p.id === id);
     if (
       !next ||
@@ -110,7 +110,7 @@ export async function activatePlugin(id: string): Promise<void> {
   }
   const p = usePlugins
     .getState()
-    .installed.find((p) => p.id === id && p.enabled);
+    .installed.find((p) => p.id === id && canOpenExtension(p));
   if (!p) return;
   if (
     (installedKind(p) === "app" && applicationIdFromLocation() !== p.id) ||
@@ -179,8 +179,8 @@ export async function openPlugin(id: string) {
   try {
     const item = usePlugins
       .getState()
-      .installed.find((p) => p.id === id && p.enabled);
-    if (!item) throw new Error("请先安装并启用扩展");
+      .installed.find((p) => p.id === id);
+    if (!item) throw new Error("请先安装扩展");
     if (installedKind(item) === "app") {
       if (!openingApplications.has(id)) {
         const opening = invoke<void>("application_open", { id }).finally(() =>
@@ -191,6 +191,7 @@ export async function openPlugin(id: string) {
       await openingApplications.get(id);
       return;
     }
+    if (!item.enabled) throw new Error("请先启用插件");
     usePlugins.setState({ selected: id });
     await activatePlugin(id);
   } catch (e) {
@@ -198,6 +199,7 @@ export async function openPlugin(id: string) {
   }
 }
 export async function togglePlugin(p: Installed) {
+  if (installedKind(p) === "app") throw new Error("应用安装后即可使用");
   stopPlugin(p.id);
   await invoke("plugin_set_enabled", { id: p.id, enabled: !p.enabled });
   await refreshPlugins();

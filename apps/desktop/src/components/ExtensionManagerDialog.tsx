@@ -25,6 +25,8 @@ import { describePermission } from "../plugin/permissions";
 import { useRegistry } from "../plugin/registry";
 import { PluginBoundary, ContributionView } from "../plugin/PluginSurface";
 
+import { ApplicationTile } from "./ApplicationTile";
+
 interface MarketEntry {
   kind?: ExtensionKind;
   id: string;
@@ -77,7 +79,7 @@ export default function ExtensionManagerDialog({
       message:
         "请确认来源可信并核对权限（应用在独立窗口运行，插件附加到主窗口）：\n\n" +
         m.permissions.map(describePermission).join("\n") +
-        "\n\n安装及更新后默认关闭，需要手动启用。",
+        (kindOf(m) === "app" ? "\n\n安装后点击应用图标即可使用。" : "\n\n安装及更新后默认关闭，需要手动启用。"),
     });
   const local = async (directory: boolean, dev = false) => {
     const p = await open({
@@ -125,6 +127,14 @@ export default function ExtensionManagerDialog({
       devPath: null,
     });
   };
+  const openApplication = (id: string) => {
+    useStore.getState().setDialog(null);
+    void openPlugin(id);
+  };
+  const remove = (p: Installed) => run(async () => {
+    if (await confirm({ title: "卸载" + noun, message: "将清除 " + p.manifest.name + " 的私有数据，确认卸载？" }))
+      await uninstallPlugin(p.id);
+  });
   const actions = (
     p?: Installed,
     install?: () => Promise<void>,
@@ -220,9 +230,9 @@ export default function ExtensionManagerDialog({
       </div>
       <p className="muted">
         {kind === "app"
-          ? "应用在独立窗口打开，拥有自己的界面和运行状态，关闭应用不会影响主窗口终端。"
+          ? "安装后点击图标即可使用，应用在独立窗口打开。关闭应用不会影响主窗口终端。"
           : "插件附加到主窗口，用于增强当前终端、会话和主窗口能力。"}
-        按需安装、默认停用，权限需明确授权。
+        {kind === "app" ? "安装时确认权限。" : "按需安装、默认停用，权限需明确授权。"}
       </p>
       <div className="plugin-actions">
         <button
@@ -263,15 +273,27 @@ export default function ExtensionManagerDialog({
       <h3 className="plugin-list-heading">
         {noun}列表{" "}
         <small>
-          已安装 {installed.length} · 已启用{" "}
-          {installed.filter((p) => p.enabled).length}
+          已安装 {installed.length}
+          {kind === "plugin" && <> · 已启用 {installed.filter((p) => p.enabled).length}</>}
         </small>
       </h3>
-      <div className="plugin-list">
+      <div className={kind === "app" ? "application-grid" : "plugin-list"}>
         {rows.map(({ manifest: m, existing: p, official }) => {
           const shown = p?.manifest ?? m;
           const current =
             p?.source === "builtin" && p.manifest.version === m.version;
+          if (kind === "app") return (
+            <ApplicationTile
+              key={m.id} id={m.id} name={shown.name} description={shown.description}
+              version={shown.version} permissions={shown.permissions}
+              source={p ? (p.source === "builtin" ? "随包官方版" : p.source) : "官方应用"}
+              installed={!!p} busy={busy}
+              onOpen={() => openApplication(m.id)}
+              onInstall={official ? () => void run(() => installBuiltin(m)) : undefined}
+              onUpdate={official && !!p && !current ? () => void run(() => installBuiltin(m)) : undefined}
+              onUninstall={p ? () => void remove(p) : undefined}
+            />
+          );
           return (
             <section
               className="plugin-card plugin-list-row"
@@ -340,7 +362,7 @@ export default function ExtensionManagerDialog({
         ))}
       <details>
         <summary>为已安装扩展添加联网域名</summary>
-        <p>只填写准确域名，不含协议和路径。添加后扩展会停用，需要重新启用。</p>
+        <p>只填写准确域名，不含协议和路径。{kind === "app" ? "授权后关闭已有窗口，再点击应用图标打开。" : "添加后插件会停用，需要重新启用。"}</p>
         <input
           placeholder="api.example.com"
           value={domain}
@@ -420,10 +442,20 @@ export default function ExtensionManagerDialog({
           检查更新
         </button>
       </div>
+      <div className={kind === "app" ? "application-grid" : "plugin-list"}>
       {market
         .filter((entry) => (entry.kind ?? "plugin") === kind)
         .map((entry) => {
           const p = installed.find((p) => p.id === entry.id);
+          if (kind === "app") return (
+            <ApplicationTile key={entry.id} id={entry.id} name={entry.name} version={entry.version}
+              source="自托管仓库" installed={!!p} busy={busy}
+              onOpen={() => openApplication(entry.id)}
+              onInstall={() => void run(() => fromMarket(entry))}
+              onUpdate={p ? () => void run(() => fromMarket(entry)) : undefined}
+              onUninstall={p ? () => void remove(p) : undefined}
+            />
+          );
           return (
             <section
               className="plugin-card plugin-list-row"
@@ -440,6 +472,7 @@ export default function ExtensionManagerDialog({
             </section>
           );
         })}
+      </div>
       {audit.length > 0 && (
         <>
           <h3>最近权限调用</h3>
