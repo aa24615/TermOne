@@ -516,8 +516,10 @@ textarea {
 }
 
 .term-wrap {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 10px 2px 6px 10px;
 }
 
@@ -586,30 +588,25 @@ textarea {
 }
 
 .pane-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 24px;
+  flex: 0 0 28px;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 8px 0 10px;
-  background: linear-gradient(var(--bg-elev), rgba(0, 0, 0, 0));
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 5;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
 }
 
-.pane:hover .pane-bar {
-  opacity: 1;
+.pane.active .pane-bar {
+  background: var(--accent-soft);
 }
 
 .pane-bar-actions {
   display: flex;
   gap: 2px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .pane-bar-actions .icon-btn {
@@ -618,18 +615,19 @@ textarea {
   height: 22px;
   padding: 0;
   border-radius: 4px;
-  color: var(--text-dim);
+  color: var(--fg-dim);
   background: transparent;
 }
 
 .pane-bar-actions .icon-btn:hover {
-  background: var(--hover);
-  color: var(--text);
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 .pane-title {
+  min-width: 0;
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--fg-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

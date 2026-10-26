@@ -87,6 +87,7 @@ export function SshImportDialog() {
       <details className="import-help" open={format === "termius" || undefined}>
         <summary>各软件配置位置与兼容说明</summary>
         <p>Tabby：设置 → 配置文件中的 config.yaml；WindTerm：profiles/default.v10/terminal/user.sessions（版本目录可能不同）。</p>
+        <p>electerm：设置 → 同步 → 导出的全量 JSON，或复制的单个书签 JSON；iTerm2：设置 → Profiles → Other Actions → Save Profile as JSON，也可选择 com.googlecode.iterm2.plist。iTerm2 仅迁移直接 ssh 命令对应的远程连接。</p>
         <p>Termius：选择已有的 CSV 或 OpenSSH 格式迁移文件，也可按下面的 CSV 模板整理连接。加密数据目录不能直接导入。</p>
         <p>Xshell：会话 .xsh 或未加密 .xts；FinalShell：conn 目录；SecureCRT：Sessions 目录或导出的 XML；PuTTY / KiTTY：Sessions 注册表导出 .reg；MobaXterm：INI 或会话导出文件。</p>
         <p>也支持 mRemoteNG / SuperPuTTY XML、WinSCP INI、Remmina。加密归档请先在原软件解密导出。私钥只迁移路径；密码需连接时重新输入。代理、隧道或登录脚本未完整迁移时会提示检查。</p>

@@ -60,6 +60,7 @@ fn supported(path: &Path) -> bool {
             | "conf"
             | "config"
             | "zip"
+            | "plist"
     )
 }
 fn read_paths(paths: Vec<String>) -> Result<ImportFiles, String> {
@@ -148,12 +149,75 @@ fn read_paths(paths: Vec<String>) -> Result<ImportFiles, String> {
         if bytes.len() > MAX_FILE || total > MAX_TOTAL {
             return Err("导入数据过大（单文件 16 MiB，合计 32 MiB）".into());
         }
+        let raw_size = bytes.len();
+        let bytes = match normalize_iterm_plist(&path, bytes) {
+            Ok(v) => v,
+            Err(_) => {
+                out.warnings.push(format!(
+                    "{name}：无法读取 iTerm2 plist，请使用导出的 Profile JSON"
+                ));
+                continue;
+            }
+        };
+        if bytes.len() > MAX_FILE {
+            return Err("转换后的配置超过 16 MiB，请只导出所需的 SSH Profile".into());
+        }
+        total = total - raw_size + bytes.len();
+        if total > MAX_TOTAL {
+            return Err("转换后的配置合计超过 32 MiB，请缩小选择范围".into());
+        }
         out.files.push(ImportFile {
             name,
             data_b64: STANDARD.encode(bytes),
         });
     }
     Ok(out)
+}
+
+/// iTerm2 stores preferences as binary/XML property lists. Only expose profile fields needed
+/// for SSH migration, never the rest of the user's terminal settings or embedded data.
+fn normalize_iterm_plist(path: &Path, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    let plist = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("plist"))
+        || bytes.starts_with(b"bplist");
+    if !plist || bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'{') {
+        return Ok(bytes);
+    }
+    let value =
+        plist::Value::from_reader(std::io::Cursor::new(bytes)).map_err(|_| "plist 格式无效")?;
+    let dict = value.as_dictionary().ok_or("plist 根节点不是字典")?;
+    let profiles = dict
+        .get("Profiles")
+        .or_else(|| dict.get("New Bookmarks"))
+        .and_then(|v| v.as_array())
+        .ok_or("plist 没有 Profile 列表")?;
+    let keys = [
+        "Name",
+        "Guid",
+        "Tags",
+        "Custom Command",
+        "Command",
+        "Initial Text",
+        "Dynamic Profile Parent GUID",
+        "Dynamic Profile Parent Name",
+    ];
+    let mut clean_profiles = Vec::new();
+    for profile in profiles {
+        if let Some(p) = profile.as_dictionary() {
+            let mut selected = serde_json::Map::new();
+            for key in keys {
+                if let Some(value) = p.get(key) {
+                    selected.insert(
+                        key.to_string(),
+                        serde_json::to_value(value).map_err(|_| "Profile 字段无效")?,
+                    );
+                }
+            }
+            clean_profiles.push(serde_json::Value::Object(selected));
+        }
+    }
+    serde_json::to_vec(&serde_json::json!({"Profiles":clean_profiles,"Default Bookmark Guid":dict.get("Default Bookmark Guid").and_then(|v| v.as_string())})).map_err(|_| "plist 转换失败".into())
 }
 #[tauri::command]
 pub async fn ssh_import_read(
@@ -185,6 +249,57 @@ pub fn ssh_import_apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn iterm_binary_and_xml_plist_convert_only_profile_fields() {
+        let root: plist::Value = plist::to_value(&serde_json::json!({
+            "New Bookmarks":[{"Name":"远程", "Guid":"ssh", "Command":"ssh -p2222 ops@app.example", "Custom Command":"Yes", "Tags":["生产"], "Password":"do-not-expose", "Background Image Location":"private-path"}],
+            "Default Bookmark Guid":"ssh", "Other Secret":"do-not-expose"
+        })).unwrap();
+        for binary in [false, true] {
+            let mut bytes = Vec::new();
+            if binary {
+                root.to_writer_binary(&mut bytes).unwrap();
+            } else {
+                root.to_writer_xml(&mut bytes).unwrap();
+            }
+            let converted =
+                normalize_iterm_plist(Path::new("com.googlecode.iterm2.plist"), bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&converted).unwrap();
+            assert_eq!(value["Profiles"][0]["Name"], "远程");
+            assert_eq!(
+                value["Profiles"][0]["Command"],
+                "ssh -p2222 ops@app.example"
+            );
+            assert_eq!(value["Profiles"][0]["Tags"][0], "生产");
+            assert!(!String::from_utf8(converted)
+                .unwrap()
+                .contains("do-not-expose"));
+            assert!(value["Profiles"][0]
+                .get("Background Image Location")
+                .is_none());
+        }
+    }
+    #[test]
+    fn iterm_plist_is_discovered_in_directories() {
+        let root =
+            std::env::temp_dir().join(format!("termone-iterm-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let value: plist::Value = plist::to_value(
+            &serde_json::json!({"Profiles":[{"Name":"server", "Command":"ssh server.example"}]}),
+        )
+        .unwrap();
+        value
+            .to_file_binary(root.join("com.googlecode.iterm2.plist"))
+            .unwrap();
+        let out = read_paths(vec![root.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(out.files.len(), 1);
+        let bytes = STANDARD.decode(&out.files[0].data_b64).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["Profiles"][0]["Name"],
+            "server"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn reads_only_configuration_files_preserving_relative_groups_and_deduplicates_paths() {
         let root =

@@ -161,7 +161,7 @@ test("mRemoteNG: SSH2 connection nodes, nested containers, skip RDP", () => {
 });
 test("SuperPuTTY, WinSCP and Remmina formats", () => {
   assert.equal(parse("sessions.xml", '<ArrayOfSessionData><SessionData SessionId="Prod/App" SessionName="App" Host="app.example" Port="22" Proto="SSH" Username="root"/></ArrayOfSessionData>').entries[0].group[0], "Prod");
-  const winscp = parse("WinSCP.ini", "[Sessions\\Prod%2FAppServer]\nHostName=app.example\nPortNumber=2222\nUserName=Admin\nFSProtocol=5\n");
+  const winscp = parse("WinSCP.ini", "[Sessions\\Prod%2FAppServer]\nHostName=app.example\nPortNumber=2222\nUserName=Admin\nFSProtocol=2\n");
   assert.equal(winscp.entries[0].name, "AppServer"); assert.deepEqual(winscp.entries[0].group, ["Prod"]);
   assert.equal(parse("prod.remmina", "[remmina]\nname=Production\nprotocol=SSH\nserver=app.example:2222\nusername=admin\n").entries[0].config.port, 2222);
 });
@@ -188,4 +188,61 @@ test("duplicate identity is host+port+user+jump, excludes local profiles and sof
   assert.equal(sshConnectionKey(config), sshConnectionKey({ ...config, host: "example.com" }));
   assert.notEqual(sshConnectionKey(config), sshConnectionKey({ ...config, proxyJump: "jump" }));
   assert.equal(existingSshKeys([{kind:"local",config}, {kind:"ssh",config,deleted:true}, {kind:"ssh",config}]).size, 1);
+});
+
+
+test("electerm: full export preserves nested group membership and resolves authentication profiles", () => {
+  const out = parse("electerm-all-data.json", JSON.stringify({
+    bookmarks:[{id:"app",type:"ssh",title:"应用",host:"app.example",port:2222,authType:"profiles",profile:"auth"},{id:"local",type:"local",title:"本地",host:"ignored"}],
+    bookmarkGroups:[{id:"prod",title:"生产",bookmarkIds:[],bookmarkGroupIds:["east"]},{id:"east",title:"华东",bookmarkIds:["app"],bookmarkGroupIds:[]}],
+    profiles:[{id:"auth",name:"认证",username:"deploy",privateKeyPath:"~/.ssh/key",password:"dont-copy"}],
+  }));
+  assert.equal(out.entries.length,1);assert.deepEqual(out.entries[0].group,["生产","华东"]);
+  assert.equal(out.entries[0].config.user,"deploy");assert.equal(out.entries[0].config.port,2222);
+  assert.equal(out.entries[0].config.identityFile,"~/.ssh/key");assert.ok(!JSON.stringify(out).includes("dont-copy"));
+});
+test("electerm: copied bookmark and array export, inline credentials never copied", () => {
+  for(const data of [{type:"ssh",host:"app.example",title:"app",username:"ops",privateKey:"PRIVATE-KEY-CONTENT",password:"SECRET-PASSWORD"},[{type:"ssh",host:"db.example",title:"db",username:"ops"}]]) {
+    const out=parse("bookmark.json",JSON.stringify(data));assert.equal(out.entries.length,1);assert.equal(out.entries[0].config.user,"ops");
+    assert.ok(!JSON.stringify(out).includes("PRIVATE-KEY-CONTENT"));assert.ok(!JSON.stringify(out).includes("SECRET-PASSWORD"));
+  }
+});
+test("electerm: jump hosts, legacy string records, missing profile and group cycle", () => {
+  const out=parse("electerm.json",JSON.stringify({bookmarks:[JSON.stringify({id:"a",title:"app",host:"app.example",connectionHoppings:[{host:"2001:db8::1",username:"jump",port:2222}]}),{id:"b",title:"bad",host:"bad.example",authType:"profiles",profile:"missing"}],bookmarkGroups:[{id:"default",title:"默认",bookmarkIds:["a"]}]}));
+  assert.equal(out.entries.length,1);assert.equal(out.entries[0].config.proxyJump,"jump@[2001:db8::1]:2222");assert.deepEqual(out.entries[0].group,[]);
+  assert.ok(out.warnings.length);
+  const cycle=parse("electerm.json",JSON.stringify({bookmarks:[{id:"a",title:"app",host:"app.example"}],bookmarkGroups:[{id:"one",title:"1",bookmarkIds:["a"],bookmarkGroupIds:["two"]},{id:"two",title:"2",bookmarkGroupIds:["one"]}]}));
+  assert.equal(cycle.entries.length,0);assert.ok(cycle.warnings.length);
+});
+test("iTerm2: dynamic profiles, direct command arguments, quoting and tags", () => {
+  const out=parse("profiles.json",JSON.stringify({Profiles:[{Name:"生产 SSH",Guid:"prod","Custom Command":"Yes",Command:'/usr/bin/ssh -p2222 -l deploy -i "~/.ssh/key with space" -J ops@jump:22 -L8080:localhost:80 -R9000:localhost:90 -D1080 app.example',Tags:["生产/华东"]},{Name:"本地","Custom Command":"No",Command:"/bin/zsh"}]}));
+  assert.equal(out.entries.length,1);const c=out.entries[0].config;
+  assert.equal(c.host,"app.example");assert.equal(c.port,2222);assert.equal(c.user,"deploy");assert.equal(c.identityFile,"~/.ssh/key with space");
+  assert.equal(c.proxyJump,"ops@jump:22");assert.equal(c.localForward,"8080:localhost:80");assert.equal(c.remoteForward,"9000:localhost:90");assert.equal(c.dynamicForward,1080);
+  assert.deepEqual(out.entries[0].group,["生产","华东"]);
+});
+test("iTerm2: single JSON, IPv6 SSH URL and options-style command",()=>{
+  const a=parse("profile.json",JSON.stringify({Name:"IPv6","Custom Command":"Yes",Command:"ssh ssh://ops:do-not-copy@[2001:db8::1]:2222"}));
+  assert.equal(a.entries[0].config.host,"2001:db8::1");assert.equal(a.entries[0].config.user,"ops");assert.equal(a.entries[0].config.port,2222);assert.ok(!JSON.stringify(a).includes("do-not-copy"));
+  const b=parse("profile.json",JSON.stringify({Name:"Options",Command:'ssh -o "HostName=app.example" -oUser=root -oPort=2200 -- alias'}));
+  assert.equal(b.entries[0].config.host,"app.example");assert.equal(b.entries[0].config.user,"root");assert.equal(b.entries[0].config.port,2200);
+});
+test("iTerm2: initial text and inherited profiles from preferences JSON",()=>{
+  const out=parse("iterm.json",JSON.stringify({"New Bookmarks":[{Name:"Parent",Guid:"parent","Custom Command":"Yes",Command:"ssh deploy@app.example"},{Name:"Child",Guid:"child","Dynamic Profile Parent GUID":"parent"},{Name:"Initial","Custom Command":"No","Initial Text":"ssh ops@db.example"}]}));
+  assert.equal(out.entries.length,3);assert.equal(out.entries[1].name,"Child");assert.equal(out.entries[1].config.host,"app.example");assert.equal(out.entries[2].config.user,"ops");
+});
+test("iTerm2: shell wrappers, command substitutions, ProxyCommand and custom config are never executed or imported",()=>{
+  const commands=["ssh host && touch /tmp/nope","sh -c 'ssh host'","ssh $(touch /tmp/nope)","ssh -oProxyCommand=anything host","ssh -F /tmp/external-config host"];
+  const out=parse("profiles.json",JSON.stringify({Profiles:commands.map((Command,i)=>({Name:"bad"+i,Command,"Custom Command":"Yes"})).concat({Name:"good",Command:"ssh user@safe.example"})}));
+  assert.equal(out.entries.length,1);assert.equal(out.entries[0].name,"good");assert.ok(out.warnings.length>=commands.length);
+});
+test("WinSCP: official protocol enum admits SCP/SFTP/SFTP-only and excludes FTP/WebDAV/S3",()=>{
+  const out=parse("WinSCP.ini",[0,1,2,5,6,7,99].map(n=>`[Sessions\\server${n}]\nHostName=server${n}.example\nFSProtocol=${n}\n`).join(""));
+  assert.deepEqual(out.entries.map(e=>e.name),["server0","server1","server2"]);
+});
+test("WinSCP and MobaXterm preserve case-distinct session names",()=>{
+  const w=parse("WinSCP.ini","[Sessions\\Prod]\nHostName=prod.example\n[Sessions\\prod]\nHostName=other.example\n");
+  assert.deepEqual(w.entries.map(e=>e.name),["Prod","prod"]);
+  const m=parse("MobaXterm.ini","[Bookmarks]\nSubRep=生产\nProd=#109#0%one.example%22%ops%\nprod=#109#0%two.example%22%ops%\n");
+  assert.deepEqual(m.entries.map(e=>e.name),["Prod","prod"]);assert.deepEqual(m.entries[0].group,["生产"]);
 });

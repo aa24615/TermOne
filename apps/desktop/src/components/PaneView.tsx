@@ -82,32 +82,6 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
       className={`pane${active ? " active" : ""}`}
       onMouseDown={() => setActivePane(pane.id)}
     >
-      {pane.kind === "welcome" ? (
-        <WelcomePane />
-      ) : pane.sessionId ? (
-        <TerminalView key={pane.sessionId} pane={pane} active={active} />
-      ) : (
-        <div className="pane-empty">
-          <p>空面板</p>
-          <div className="pane-empty-actions">
-            <button className="btn small" onClick={() => void openInPane(pane.id, null)}>
-              新建本地终端
-            </button>
-            <select aria-label="在当前分屏连接档案" defaultValue="" onChange={e => { if (e.target.value) void openInPane(pane.id, e.target.value); }}><option value="">或选择档案连接</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-          </div>
-        </div>
-      )}
-
-      {pane.exitInfo && (
-        <div className="term-end">
-          <span>{pane.exitInfo}</span>
-          {pane.kind === "ssh" && <><button className="btn small" onClick={() => void reconnect(pane.id)}>立即重连</button><button className="btn small" onClick={() => stopReconnect(pane.id)}>停止自动重连</button></>}
-          <button className="btn small" onClick={() => closePane(pane.id)}>
-            关闭面板
-          </button>
-        </div>
-      )}
-
       <div className="pane-bar">
         <span className="pane-title" title={pane.sessionTitle ?? pane.title}>
           {pane.title || "空面板"}
@@ -133,7 +107,31 @@ export function PaneView({ node, tabId }: { node: PaneNode; tabId: string }) {
         </span>
       </div>
 
+      {pane.kind === "welcome" ? (
+        <WelcomePane />
+      ) : pane.sessionId ? (
+        <TerminalView key={pane.sessionId} pane={pane} active={active} />
+      ) : (
+        <div className="pane-empty">
+          <p>空面板</p>
+          <div className="pane-empty-actions">
+            <button className="btn small" onClick={() => void openInPane(pane.id, null)}>
+              新建本地终端
+            </button>
+            <select aria-label="在当前分屏连接档案" defaultValue="" onChange={e => { if (e.target.value) void openInPane(pane.id, e.target.value); }}><option value="">或选择档案连接</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+          </div>
+        </div>
+      )}
 
+      {pane.exitInfo && (
+        <div className="term-end">
+          <span>{pane.exitInfo}</span>
+          {pane.kind === "ssh" && <><button className="btn small" onClick={() => void reconnect(pane.id)}>立即重连</button><button className="btn small" onClick={() => stopReconnect(pane.id)}>停止自动重连</button></>}
+          <button className="btn small" onClick={() => closePane(pane.id)}>
+            关闭面板
+          </button>
+        </div>
+      )}
     </div>
   );
 }

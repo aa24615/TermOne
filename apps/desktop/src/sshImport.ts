@@ -2,6 +2,7 @@ import { parseDocument } from "yaml";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { unzipSync } from "fflate";
 import type { ProfileRow, SshProfileConfig } from "./types";
+import { parseElecterm, parseIterm } from "./sshClientImport";
 
 export const IMPORT_FORMATS = [
   ["auto", "自动识别"], ["termius", "Termius（CSV / OpenSSH）"], ["openssh", "OpenSSH / SSH Config"],
@@ -11,6 +12,7 @@ export const IMPORT_FORMATS = [
   ["windterm", "WindTerm (user.sessions)"], ["mremoteng", "mRemoteNG (.xml)"],
   ["superputty", "SuperPuTTY (.xml)"], ["winscp", "WinSCP (.ini)"],
   ["remmina", "Remmina (.remmina)"], ["csv", "通用 CSV"],
+  ["electerm", "electerm（书签 / 全量导出 JSON）"], ["iterm2", "iTerm2（Profile JSON / plist）"],
 ] as const;
 export type ImportFormat = typeof IMPORT_FORMATS[number][0];
 export interface ImportFile { name: string; data: Uint8Array }
@@ -109,6 +111,8 @@ export function parseSshImport(input: ImportFile[], format: ImportFormat = "auto
     switch (detected) {
       case "openssh": parseOpenSsh(text, emit, s => warn(`${file.name}：${s}`)); break;
       case "csv": parseCsv(text, emit); break;
+      case "electerm": parseElecterm(JSON.parse(text), emit, s => warn(`${file.name}：${s}`)); break;
+      case "iterm2": parseIterm(JSON.parse(text), emit, s => warn(`${file.name}：${s}`)); break;
       case "tabby": {
         const doc = parseDocument(text, { uniqueKeys: true });
         if (doc.errors.length) throw new Error("YAML 配置语法错误");
@@ -192,6 +196,8 @@ export function parseSshImport(input: ImportFile[], format: ImportFormat = "auto
 }
 
 function detect(text: string, name: string): ImportFormat {
+  if (/"(?:Profiles|New Bookmarks|Custom Command)"\s*:/.test(text) || /"Name"\s*:/.test(text) && /"Command"\s*:/.test(text)) return "iterm2";
+  if (/"(?:bookmarks|bookmarkGroups)"\s*:/.test(text) || /"title"\s*:/.test(text) && /"host"\s*:/.test(text)) return "electerm";
   if (/Windows Registry Editor|\[HKEY_.*\\(?:PuTTY|KiTTY)\\Sessions\\/i.test(text)) return "putty";
   if (/\[Bookmarks(?:_\d+)?\]/i.test(text)) return "mobaxterm";
   if (/S:"Hostname"\s*=/.test(text) || /<VanDyke[\s>]/i.test(text)) return "securecrt";
@@ -261,24 +267,24 @@ function parseOpenSsh(text: string, emit: (p: Obj, notes?: string[]) => void, wa
 }
 
 const iniLabels = new WeakMap<Obj, { name: string; keys: Map<string, string> }>();
-function ini(text: string): Map<string, Obj> {
+function ini(text: string, preserveSections = false, preserveKeys = false): Map<string, Obj> {
   const sections = new Map<string, Obj>();
   let section: Obj = {}; sections.set("", section);
   for (const line of text.split(/\r?\n/)) {
     if (/^\s*[;#]/.test(line)) continue;
     const heading = /^\s*\[([^\]]+)\]\s*$/.exec(line);
-    if (heading) { section = {}; sections.set(heading[1].toLowerCase(), section); iniLabels.set(section, { name: heading[1], keys: new Map() }); continue; }
+    if (heading) { section = {}; sections.set(preserveSections ? heading[1] : heading[1].toLowerCase(), section); iniLabels.set(section, { name: heading[1], keys: new Map() }); continue; }
     const equal = line.indexOf("=");
     if (equal >= 0) {
       const key = line.slice(0, equal).trim();
-      section[key.toLowerCase()] = line.slice(equal + 1).trim();
+      section[preserveKeys ? key : key.toLowerCase()] = line.slice(equal + 1).trim();
       iniLabels.get(section)?.keys.set(key.toLowerCase(), key);
     }
   }
   return sections;
 }
 function parseIni(text: string, format: ImportFormat, file: string, emit: (p: Obj, notes?: string[]) => void) {
-  const s = ini(text), folder = pathGroup(file);
+  const s = ini(text, format === "winscp", format === "mobaxterm"), folder = pathGroup(file);
   if (format === "xshell") {
     const c = s.get("connection") || {}, a = s.get("connection:authentication") || {};
     if (!nonSsh(c.protocol)) emit({ name: leaf(file), group: folder, host: c.host, port: c.port, user: a.username,
@@ -291,7 +297,8 @@ function parseIni(text: string, format: ImportFormat, file: string, emit: (p: Ob
       identityFile: get("identity filename"), password: get("password v2") || get("password") }, ["防火墙/跳板、隧道及登录脚本请对照原软件检查"]);
   } else if (format === "winscp") {
     for (const [name, v] of s) {
-      if (!name.startsWith("sessions\\") || ["2", "6", "7"].includes(v.fsprotocol)) continue;
+      // WinSCP TFSProtocol: 0=SCP, 1=SFTP, 2=SFTP-only; 5=FTP, 6=WebDAV, 7=S3.
+      if (!name.toLowerCase().startsWith("sessions\\") || v.fsprotocol && !["0", "1", "2"].includes(v.fsprotocol)) continue;
       const label = decodeName((iniLabels.get(v)?.name || name).slice(9)), parts = groups(label);
       emit({ name: parts.pop(), group: parts, host: decodeName(v.hostname || ""), port: v.portnumber, user: decodeName(v.username || ""), identityFile: decodeName(v.publickeyfile || ""), password: v.password }, v.proxyhost || v.tunnelhostname ? ["代理/隧道未迁移，请检查原配置"] : []);
     }
@@ -302,10 +309,10 @@ function parseIni(text: string, format: ImportFormat, file: string, emit: (p: Ob
     for (const [section, v] of s) {
       if (!/^bookmarks(?:_\d+)?$/.test(section)) continue;
       for (const [name, value] of Object.entries(v)) {
-        if (name === "subrep" || name === "imgnum") continue;
+        if (name.toLowerCase() === "subrep" || name.toLowerCase() === "imgnum") continue;
         const fields = str(value).split("#").find(part => /^\d+%/.test(part))?.split("%");
         if (!fields || fields[0] !== "0") continue;
-        emit({ name: iniLabels.get(v)?.keys.get(name) || name, group: v.subrep, host: fields[1], port: fields[2], user: fields[3] }, ["密码、私钥、网关、隧道及登录脚本请在导入后检查"]);
+        emit({ name, group: Object.entries(v).find(([k]) => k.toLowerCase() === "subrep")?.[1], host: fields[1], port: fields[2], user: fields[3] }, ["密码、私钥、网关、隧道及登录脚本请在导入后检查"]);
       }
     }
   }

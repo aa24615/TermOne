@@ -65,6 +65,8 @@ npm run tauri build
 
 - **Tabby**：`config.yaml`，读取 SSH profiles、组名/父组、全局和所在组的 SSH 默认值、私钥路径、跳板机引用链；本地 Shell 和模板不导入。
 - **WindTerm**：`profiles/default.v10/terminal/user.sessions`（版本目录可能不同），读取 SSH 会话、分组、`user@host` 和私钥路径。
+- **electerm**：设置 → 同步 → 导出的全量 JSON，或复制的单个书签 JSON / 书签数组；保留嵌套分组、用户名、端口、私钥路径和跳板链，解析导出文件中的认证档案引用。内嵌私钥、密码与证书不迁移。
+- **iTerm2**：设置 → Profiles → Other Actions → Save Profile as JSON，或选择 `com.googlecode.iterm2.plist`（支持二进制/XML）；读取直接 `ssh` 命令、SSH 启动文本和同文件父 Profile，支持端口/用户/私钥/跳板/转发选项，首个标签作为分组。shell 包装、复合命令、动态表达式、`ProxyCommand` 和外部 `-F` 配置会跳过并提示；不会执行 Profile 中的命令。
 - **Termius**：接受准备好的 **CSV / OpenSSH** 迁移文件。不直接解析当前 Termius 的加密数据目录；官方旧版 CLI 曾提供 `export-ssh-config`，但[仓库已归档](https://github.com/termius/termius-cli)，不保证适用于当前版本。
 - 其他适配：OpenSSH `config`、Xshell `.xsh` / 未加密 `.xts`、FinalShell `conn` JSON、SecureCRT Sessions INI / XML、PuTTY / KiTTY Sessions `.reg`、MobaXterm INI / 文本会话导出、mRemoteNG / SuperPuTTY XML、WinSCP INI、Remmina、通用 CSV。ZIP / XTS 只读取支持的文本配置，不在磁盘解压。
 
@@ -76,6 +78,8 @@ name,host,port,username,group
 ```
 
 密码不迁移，首次连接时重新输入；私钥只记录路径，跨电脑迁移后请重新选择本机私钥，PPK 需转换为 OpenSSH 格式。未迁移的代理、隧道、登录脚本会在预览中提示。OpenSSH 不执行 `Match exec` / `ProxyCommand`、不自动读取 `Include`；依赖 ProxyCommand 的主机跳过并提示。加密归档须先在原软件导出明文配置。支持 UTF-8、带 BOM 的 UTF-16 和 GB18030；一次最多 1000 文件 / 10000 连接，单文件 16 MiB、合计 32 MiB。连接与分组在同一数据库事务内保存，失败整批回滚。
+
+PuTTY 使用 Sessions 注册表 `.reg` 导出，Xshell 使用 `.xsh` / 未加密 `.xts`，MobaXterm 使用 INI / 文本会话导出；WinSCP 使用 INI，只迁移 SCP/SFTP/SFTP-only（官方协议编号 0/1/2），排除 FTP/WebDAV/S3。WinSCP、MobaXterm 的大小写不同会话名分别保留。
 
 ## 服务端 Docker 部署
 
