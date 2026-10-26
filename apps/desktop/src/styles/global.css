@@ -1069,6 +1069,28 @@ input[type="checkbox"] {
 }
 
 /* ============ 对话框 ============ */
+.ssh-import { display: grid; gap: 14px; }
+.import-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.import-controls > label { display: grid; gap: 6px; font-size: 12px; color: var(--fg-dim); }
+.import-buttons, .import-summary, .import-pagination { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.import-summary { justify-content: space-between; font-size: 12px; }
+.import-summary label { display: flex; gap: 6px; align-items: center; }
+.ssh-import input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); }
+.ssh-import summary { cursor: pointer; font-size: 12px; color: var(--fg-dim); }
+.ssh-import details p, .ssh-import details li { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.ssh-import textarea { width: 100%; resize: vertical; margin: 10px 0; font-family: var(--font-mono); }
+.import-table-wrap { overflow: auto; max-height: 330px; border: 1px solid var(--border); border-radius: 8px; }
+.import-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; text-align: left; }
+.import-table th, .import-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.import-table th { position: sticky; top: 0; background: var(--bg-elev); z-index: 1; }
+.import-table th:first-child { width: 32px; }
+.import-table th:nth-child(4) { width: 16%; }
+.import-table small { display: block; font-size: 11px; color: var(--fg-faint); margin-top: 4px; }
+.import-table strong { font-weight: 500; }
+.import-skipped { opacity: .55; }
+.import-notice, .import-table small.import-notice { color: var(--warn); }
+.import-pagination { justify-content: flex-end; font-size: 12px; }
+@media (max-width: 650px) { .import-controls { grid-template-columns: 1fr; } .import-table { min-width: 620px; } }
 
 .modal-overlay {
   position: fixed;

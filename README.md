@@ -59,6 +59,24 @@ npm run tauri dev
 npm run tauri build
 ```
 
+## 从其他软件导入 SSH 连接
+
+主窗口左下角点击 **导入 SSH 配置**，选择文件（可多选）或原软件的会话目录，也可以粘贴配置。核对预览、选择目标分组和连接，再确认导入。默认按主机、端口、用户名、跳板机跳过重复连接，保留现有档案；原分组在目标分组下合并创建，新增连接参与原有同步。
+
+- **Tabby**：`config.yaml`，读取 SSH profiles、组名/父组、全局和所在组的 SSH 默认值、私钥路径、跳板机引用链；本地 Shell 和模板不导入。
+- **WindTerm**：`profiles/default.v10/terminal/user.sessions`（版本目录可能不同），读取 SSH 会话、分组、`user@host` 和私钥路径。
+- **Termius**：接受准备好的 **CSV / OpenSSH** 迁移文件。不直接解析当前 Termius 的加密数据目录；官方旧版 CLI 曾提供 `export-ssh-config`，但[仓库已归档](https://github.com/termius/termius-cli)，不保证适用于当前版本。
+- 其他适配：OpenSSH `config`、Xshell `.xsh` / 未加密 `.xts`、FinalShell `conn` JSON、SecureCRT Sessions INI / XML、PuTTY / KiTTY Sessions `.reg`、MobaXterm INI / 文本会话导出、mRemoteNG / SuperPuTTY XML、WinSCP INI、Remmina、通用 CSV。ZIP / XTS 只读取支持的文本配置，不在磁盘解压。
+
+通用 CSV 示例（也接受 `address` / `ssh_port` / `ssh_username` / `groups` 等常见字段和中文表头）：
+
+```csv
+name,host,port,username,group
+生产服务器,192.0.2.10,22,root,生产/华东
+```
+
+密码不迁移，首次连接时重新输入；私钥只记录路径，跨电脑迁移后请重新选择本机私钥，PPK 需转换为 OpenSSH 格式。未迁移的代理、隧道、登录脚本会在预览中提示。OpenSSH 不执行 `Match exec` / `ProxyCommand`、不自动读取 `Include`；依赖 ProxyCommand 的主机跳过并提示。加密归档须先在原软件导出明文配置。支持 UTF-8、带 BOM 的 UTF-16 和 GB18030；一次最多 1000 文件 / 10000 连接，单文件 16 MiB、合计 32 MiB。连接与分组在同一数据库事务内保存，失败整批回滚。
+
 ## 服务端 Docker 部署
 
 ```bash

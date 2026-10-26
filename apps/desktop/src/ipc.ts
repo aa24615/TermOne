@@ -34,6 +34,9 @@ export function fromB64(b64: string): Uint8Array {
 }
 
 export const ipc = {
+  sshImportRead: (paths: string[]) => invoke<{ files: { name: string; dataB64: string }[]; warnings: string[] }>("ssh_import_read", { paths }),
+  sshImportApply: (entries: import("./sshImport").SshImportEntry[], skipDuplicates: boolean, parentId: string | null) =>
+    invoke<{ imported: number; skipped: number; groups: number }>("ssh_import_apply", { entries, skipDuplicates, parentId }),
   commandCheck: (input: string) => invoke<import("./terminalInputGuard").CommandCheck>("command_check", { input }),
   appInfo: () => invoke<AppInfoDto>("app_info"),
   defaultShell: () => invoke<string>("default_shell"),

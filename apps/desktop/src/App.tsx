@@ -18,6 +18,9 @@ import { PaneView } from "./components/PaneView";
 import { isTauri } from "./env";
 import { allLeaves } from "./paneTree";
 import { useStore } from "./store";
+const SshImportDialog = lazy(
+  () => import("./components/SshImportDialog").then(m => ({ default: m.SshImportDialog })),
+);
 const ExtensionManagerDialog = lazy(
   () => import("./components/ExtensionManagerDialog"),
 );
@@ -168,6 +171,7 @@ export default function App() {
       {dialog?.type === "profile" && (
         <ProfileDialog profileId={dialog.profileId} />
       )}
+      {dialog?.type === "ssh-import" && <Suspense fallback={<Modal title="导入 SSH 配置" onClose={() => useStore.getState().setDialog(null)}>正在加载…</Modal>}><SshImportDialog /></Suspense>}
       {dialog?.type === "settings" && <SettingsDialog />}
       {dialog?.type === "account" && <AccountDialog />}
       {dialog?.type === "about" && <AboutDialog />}

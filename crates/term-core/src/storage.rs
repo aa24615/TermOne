@@ -253,6 +253,53 @@ pub struct Db {
 }
 
 impl Db {
+    /// Append selected SSH profiles in one transaction. No existing profile is overwritten.
+    pub fn ssh_import(&self, entries: Vec<crate::ssh_import::SshImportEntry>, skip_duplicates: bool, parent_id: Option<String>) -> Result<crate::ssh_import::SshImportStats> {
+        use crate::ssh_import::{connection_key, SshImportStats};
+        if entries.is_empty() || entries.len() > 10000 {
+            return Err(TermError::Other("请选择 1～10000 个 SSH 连接".into()));
+        }
+        for entry in &entries { entry.validate()?; }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if let Some(ref id) = parent_id {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM groups WHERE id = ?1 AND deleted = 0)", [id], |r| r.get(0))?;
+            if !exists { return Err(TermError::Other("目标分组已不存在，请重新选择".into())); }
+        }
+        let mut known = std::collections::HashSet::new();
+        if skip_duplicates {
+            let mut stmt = tx.prepare("SELECT config FROM profiles WHERE kind = 'ssh' AND deleted = 0")?;
+            for row in stmt.query_map([], |r| r.get::<_, String>(0))? {
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&row?) { known.insert(connection_key(&config)); }
+            }
+        }
+        let mut stats = SshImportStats::default();
+        let now = now_ms();
+        for entry in entries {
+            let config = serde_json::to_value(&entry.config).map_err(|e| TermError::Other(e.to_string()))?;
+            let key = connection_key(&config);
+            if skip_duplicates && !known.insert(key) { stats.skipped += 1; continue; }
+            let mut parent = parent_id.clone();
+            for name in entry.group {
+                let existing: Option<String> = tx.query_row(
+                    "SELECT id FROM groups WHERE name = ?1 AND parent_id IS ?2 AND deleted = 0 ORDER BY sort_order, id LIMIT 1",
+                    params![name, parent], |r| r.get(0)).optional()?;
+                let id = if let Some(id) = existing { id } else {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    tx.execute("INSERT INTO groups (id, name, parent_id, sort_order, collapsed, updated_at, created_at, deleted, dirty) VALUES (?1, ?2, ?3, 0, 0, ?4, ?4, 0, 1)", params![id, name, parent, now])?;
+                    stats.groups += 1;
+                    id
+                };
+                parent = Some(id);
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO profiles (id, kind, name, config, group_id, sort_order, updated_at, created_at, last_used_at, deleted, dirty) VALUES (?1, 'ssh', ?2, ?3, ?4, 0, ?5, ?5, 0, 0, 1)", params![id, entry.name, config.to_string(), parent, now])?;
+            stats.imported += 1;
+        }
+        tx.commit()?;
+        Ok(stats)
+    }
+
     pub fn open() -> Result<Db> {
         Self::open_at(default_db_path())
     }
@@ -2343,5 +2390,76 @@ mod tests {
         db.history_add("secret-cmd", Some("h9")).unwrap();
         let dirty = db.sync_export_dirty().unwrap();
         assert!(!dirty.iter().any(|i| i.kind == "command_history"));
+    }
+}
+
+
+#[cfg(test)]
+mod ssh_import_tests {
+    use super::*;
+    use crate::ssh_import::SshImportEntry;
+    fn db() -> Db { Db::open_at(std::env::temp_dir().join(format!("termone-import-{}.db", uuid::Uuid::new_v4()))).unwrap() }
+    fn entry(host: &str) -> SshImportEntry {
+        serde_json::from_value(serde_json::json!({"name":"测试", "group":["生产","华东"], "config":{"host":host,"port":2222,"user":"root","auth":"password","password":"must-not-persist", "command":"must-not-run"}})).unwrap()
+    }
+    #[test]
+    fn imports_nested_groups_deduplicates_and_enqueues_sync_without_overwriting() {
+        let db = db();
+        let first = db.ssh_import(vec![entry("Example.COM"), entry("example.com")], true, None).unwrap();
+        assert_eq!((first.imported, first.skipped, first.groups), (1,1,2));
+        let original = db.profile_list().unwrap()[0].clone();
+        let again = db.ssh_import(vec![entry("example.com")], true, None).unwrap();
+        assert_eq!((again.imported, again.skipped, again.groups), (0,1,0));
+        assert_eq!(db.profile_list().unwrap()[0].id, original.id);
+        assert!(original.config.get("password").is_none());
+        assert!(original.config.get("command").is_none());
+        assert_eq!(original.kind, "ssh");
+        assert!(original.dirty);
+        let groups = db.group_list().unwrap();
+        let root = groups.iter().find(|g| g.name == "生产").unwrap();
+        let child = groups.iter().find(|g| g.name == "华东").unwrap();
+        assert_eq!(child.parent_id.as_deref(), Some(root.id.as_str()));
+        assert_eq!(original.group_id, Some(child.id.clone()));
+        let dirty = db.sync_export_dirty().unwrap();
+        assert_eq!(dirty.iter().filter(|r| r.kind == "profile").count(), 1);
+        assert_eq!(dirty.iter().filter(|r| r.kind == "group").count(), 2);
+    }
+    #[test]
+    fn parent_group_keep_duplicates_and_new_endpoint() {
+        let db = db();
+        let parent = db.group_create("parent".into(), "迁移".into(), None, 0).unwrap();
+        let stats = db.ssh_import(vec![entry("app.example"), entry("app.example"), entry("db.example")], false, Some(parent.id.clone())).unwrap();
+        assert_eq!((stats.imported, stats.groups), (3,2));
+        assert!(db.group_list().unwrap().iter().any(|g| g.name == "生产" && g.parent_id == Some(parent.id.clone())));
+        assert_eq!(db.profile_list().unwrap().len(), 3);
+    }
+    #[test]
+    fn validates_all_rows_and_parent_before_any_write() {
+        let db = db();
+        let mut bad = entry("bad.example"); bad.config.port = 0;
+        assert!(db.ssh_import(vec![entry("good.example"), bad], true, None).is_err());
+        assert!(db.profile_list().unwrap().is_empty()); assert!(db.group_list().unwrap().is_empty());
+        assert!(db.ssh_import(vec![entry("good.example")], true, Some("missing".into())).is_err());
+        assert!(db.group_list().unwrap().is_empty());
+        for host in ["-oProxyCommand=anything", "bad host", "bad\nhost", "user@host"] { assert!(entry(host).validate().is_err()); }
+    }
+    #[test]
+    fn sqlite_failure_rolls_back_profiles_and_groups() {
+        let db = db();
+        db.conn.lock().unwrap().execute_batch("CREATE TRIGGER fail_import BEFORE INSERT ON profiles WHEN json_extract(NEW.config, '$.host') = 'fail.example' BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(db.ssh_import(vec![entry("good.example"), entry("fail.example")], true, None).is_err());
+        assert!(db.profile_list().unwrap().is_empty()); assert!(db.group_list().unwrap().is_empty());
+    }
+    #[test]
+    fn distinct_user_port_jump_and_soft_deleted_connections() {
+        let db = db();
+        db.ssh_import(vec![entry("app.example")], true, None).unwrap();
+        let original = db.profile_list().unwrap()[0].id.clone();
+        let mut user = entry("app.example"); user.config.user = "ops".into();
+        let mut port = entry("app.example"); port.config.port = 22;
+        let mut jump = entry("app.example"); jump.config.proxy_jump = Some("bastion".into());
+        assert_eq!(db.ssh_import(vec![user,port,jump], true, None).unwrap().imported, 3);
+        db.profile_delete(&original).unwrap();
+        assert_eq!(db.ssh_import(vec![entry("app.example")], true, None).unwrap().imported, 1);
     }
 }

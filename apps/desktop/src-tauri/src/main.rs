@@ -2,6 +2,7 @@
 
 mod applications;
 mod commands;
+mod imports;
 mod plugins;
 mod state;
 mod workspace;
@@ -58,6 +59,8 @@ fn main() {
             commands::profile_list,
             commands::profile_save,
             commands::profile_delete,
+            imports::ssh_import_read,
+            imports::ssh_import_apply,
             commands::groups_list,
             commands::settings_all,
             commands::setting_set,

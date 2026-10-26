@@ -51,6 +51,7 @@ export interface Toast {
 }
 
 export type DialogState =
+  | { type: "ssh-import" }
   | { type: "profile"; profileId?: string }
   | { type: "settings" }
   | { type: "account" }

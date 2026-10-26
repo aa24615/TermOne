@@ -8,6 +8,7 @@ pub mod safety;
 pub mod secrets;
 pub mod session;
 pub mod storage;
+pub mod ssh_import;
 
 pub use error::{Result, TermError};
 pub use history::{matches_query, search_history, HistoryEntry, HistoryQuery};
