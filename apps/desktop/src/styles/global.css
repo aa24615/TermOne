@@ -561,11 +561,6 @@ textarea {
   overflow: hidden;
 }
 
-.pane.active {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-
 .splitter {
   flex: 0 0 auto;
   background: var(--border);

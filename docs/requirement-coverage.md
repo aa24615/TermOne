@@ -4,6 +4,8 @@
 
 ## 本期代码完成
 
+- **终端无边框**：移除活动窗格围绕命令行内容的紫色描边，仅通过标题栏底色标识当前窗格。浅色单窗格、深色左右分屏的实际 xterm 预览确认内容区 border=0、outline=none、box-shadow=none，标题与首行仍独立占位。
+
 - **2026-10-26 客户端迁移补齐与标题重叠修复**：新增 electerm 全量/书签 JSON（分组树、认证引用、跳板）及 iTerm2 Profile JSON / 二进制和 XML plist（直接 SSH 命令、同文件继承、启动文本）。PuTTY、Xshell、MobaXterm、WinSCP、electerm、OpenSSH、iTerm2 均有对应来源选项。依据 WinSCP 官方枚举修正 SCP/SFTP/SFTP-only 与 FTP 筛选，保留 WinSCP/MobaXterm 大小写不同的会话名。63 项前端测试与 15 项原生测试（含 5 项导入测试）通过；尚未用用户实际导出文件或真实 SSH 服务端验证。TermOne 窗格标题栏改为 28px 正常流占位，终端区域独立伸缩；实际 xterm 的浏览器预览验证单窗格、左右/上下分屏、760px 主区域与长标题均无重叠，标题底部与终端顶部间隔 10px。不会在悬停时覆盖首行，也不会因工具栏显隐改变终端高度。 macOS 0.1.12 应用签名及 DMG 完整性校验通过。
 
 - **跨软件 SSH 配置导入**：主窗口左下角入口；多文件、会话目录、未加密 ZIP/XTS、粘贴配置；Tabby YAML（组 ID/父组/默认值/跳板引用）、WindTerm user.sessions、Termius CSV/OpenSSH 迁移文件，以及 OpenSSH、Xshell、FinalShell、SecureCRT、PuTTY/KiTTY、MobaXterm、mRemoteNG、SuperPuTTY、WinSCP、Remmina。仅导入远程 SSH，预览勾选、分组合并、默认跳过重复、原有档案不覆盖；密码不迁移、私钥仅路径，未支持项提示核对。Termius 当前加密数据目录不支持直接导入。新增 20 个解析测试与 5 个数据库事务测试、3 个原生文件读取测试；`npm run check`、54 项前端测试、126 项 term-core 测试和 13 项原生测试通过。浏览器样例验证了解析、重复切换、统一下拉、确认后列表刷新（模拟 IPC）；真实用户导出文件和远程 SSH 登录尚未验证。macOS 0.1.11 应用与 DMG 签名/完整性校验通过；DMG 使用应用与 Applications 快捷入口直接生成。原生 UI 自动化未完成（隔离测试进程退出后，工具重新启动应用未继承隔离环境，已停止交互）；未使用真实 SSH 配置做导入验证。
