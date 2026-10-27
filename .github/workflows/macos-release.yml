@@ -1,0 +1,131 @@
+name: macOS Release
+run-name: macOS Release · ${{ inputs.version || '自动递增版本' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本（留空自动递增，如 0.2.0；须高于源码及已有标签）'
+        required: false
+        type: string
+
+# Serialize releases, including the version reservation. A failed attempt keeps its version/tag.
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: 预留版本与标签
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - name: 仅允许 main 发版
+        env:
+          SELECTED_REF: ${{ github.ref }}
+        run: test "$SELECTED_REF" = refs/heads/main
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: 刷新 main 与标签
+        run: |
+          git fetch origin main --tags
+          git checkout -B main origin/main
+      - name: 递增版本、提交并原子推送标签
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: node scripts/github-release-version.mjs
+
+  build:
+    name: 构建 macOS · ${{ matrix.arch }}
+    needs: prepare
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      TERMONE_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RUST_TARGET: ${{ matrix.target }}
+      APPLE_SIGNING_IDENTITY: '-'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          workspaces: '. -> target'
+          key: macos-${{ matrix.arch }}
+      - run: npm ci --no-audit --no-fund
+      - name: 类型与前端回归检查
+        run: |
+          npm run check
+          npm run test:desktop
+      - name: 核心与原生测试
+        run: cargo test --workspace --locked
+      - name: 构建同一版本的 macOS 应用
+        run: npm run tauri --workspace @termone/desktop -- build --target "$RUST_TARGET" --bundles app -- --locked
+      - name: 校验签名、生成 DMG / ZIP 与校验文件
+        run: node scripts/package-macos.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: 发布 GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: macos-*
+          path: release-assets
+          merge-multiple: true
+      - name: 校验全部附件并公开发布
+        run: bash scripts/publish-github-release.sh

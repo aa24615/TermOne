@@ -102,7 +102,27 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 - 数据目录：容器内 `/data`（`TERMONE_DATA` 可改），含 `termone-server.db`、`jwt.secret`、`cred.key`（凭据主密钥）；均以 `0600` 生成，挂载 named volume 可跨容器重启保留。
 - 生产环境建议置于反向代理 + HTTPS 之后。
 
-## 发版与打包（CNB 流水线）
+## 发版与打包
+
+### GitHub Actions（macOS 自动打包与发布）
+
+进入 GitHub 仓库 **Actions → macOS Release → Run workflow**，选择 `main`。版本号留空会在源码与已预留标签的最高版本上递增补丁号；也可指定更高的 `X.Y.Z`。流水线先提交统一的版本文件并原子推送版本标签，再从这个固定提交分别在 Apple Silicon / Intel runner 上执行测试、构建和校验。两个架构都成功后，才公开 GitHub Release。
+
+Release 包含两种架构的 DMG、应用 ZIP 和 `SHA256SUMS.txt`。DMG 直接生成，不依赖 Finder 自动排版；应用做 ad-hoc 签名，未配置 Apple Developer 签名或公证。仅使用仓库自带 `GITHUB_TOKEN`，无需个人访问令牌或自托管 macOS 节点。构建任务只有读取权限，预留版本和发布任务拥有写入 Release 所需的 `contents: write` 权限。
+
+发版整体串行；失败版本保留，重新发起工作流会继续递增，防止重复占用同一版本。也可以在 GitHub 界面对同一次运行选择“重新运行失败的作业”，继续该次已经预留的版本。源码与标签不会被强制覆盖。
+
+GitHub Actions 仅向 GitHub 写入发版提交及标签；本机仍保留 GitHub + CNB 双推配置。CI 发版完成后，本机可执行下面的命令同步版本，再继续本地开发/打包：
+
+```bash
+git fetch github main --tags
+git merge --ff-only github/main
+git push origin main
+```
+
+工作流：`.github/workflows/macos-release.yml`；版本预留、macOS 制品生成和 Release 发布分别由 `scripts/github-release-version.mjs`、`scripts/package-macos.mjs`、`scripts/publish-github-release.sh` 实现。
+
+### 本地版本规则与 CNB 流水线
 
 本地打包统一使用 `npm run tauri -- build`，或 `npm run tauri --workspace @termone/desktop -- build --bundles app,dmg`。每次打包前自动递增补丁版本（如 `0.1.0 → 0.1.1 → 0.1.2`），同步 Tauri、桌面 npm 包、Cargo workspace 与锁文件；安装包文件名、关于页面和状态栏使用同一版本。开发预览、前端构建、类型检查与 `build --help` 不递增。
 
