@@ -5,6 +5,7 @@ import { report } from "../plugin/shared";
 import { createHistoryController } from "./historyController";
 import { useStore } from "../store";
 import { activeCommandTarget, executePanelCommand } from "../plugin/commandActions";
+import { CompactCommandsSwitch, useCompactCommands } from "./CompactCommandsSwitch";
 
 const controllers = new WeakMap<Host, ReturnType<typeof createHistoryController>>();
 export function activate(host: Host) {
@@ -14,6 +15,7 @@ export function activate(host: Host) {
 }
 
 export default function CommandHistory({ host }: { host: Host }) {
+  const [compact, setCompact] = useCompactCommands(host.id);
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [revision, setRevision] = useState(0);
@@ -36,8 +38,9 @@ export default function CommandHistory({ host }: { host: Host }) {
     }, 100);
     return () => { alive = false; clearTimeout(timer); };
   }, [controller, host, query, revision]);
-  return <div className="plugin-stack command-history">
-    <p className="muted">{target ? `当前终端：${target.title || "终端"} · 点击命令发送并回车执行` : "请先选中本地或 SSH 终端后再点击执行"}。记录仅保存在本机，相同命令合并。</p>
+  return <div className={`plugin-stack command-history${compact ? " compact-commands" : ""}`}>
+    <div className="snippet-toolbar"><span className="muted">{target ? `当前终端：${target.title || "终端"}` : "请先选中本地或 SSH 终端"}</span><CompactCommandsSwitch compact={compact} onChange={setCompact} label="历史命令" /></div>
+    {!compact && <p className="muted">点击命令发送并回车执行。记录仅保存在本机，相同命令合并。</p>}
     <input aria-label="搜索历史命令" placeholder="搜索历史命令…" value={query} onChange={event => setQuery(event.target.value)} />
     <div className="plugin-actions history-summary">
       <span className="muted">{loading ? "正在加载…" : `${rows.length} 条命令${rows.length === 500 ? "（最多显示 500 条，可搜索更多）" : ""}`}</span>
@@ -53,13 +56,13 @@ export default function CommandHistory({ host }: { host: Host }) {
           setSending(true);
           void executePanelCommand(host, row.command).catch(error => { if (!host.signal.aborted) host.toast(String(error), true); }).finally(() => setSending(false));
         }}><pre>{row.command}</pre></button>
-        <div className="history-entry-meta">
+        {!compact && <div className="history-entry-meta">
           <span>{new Date(row.timestamp).toLocaleString("zh-CN", { hour12: false })} · 使用 {row.useCount} 次</span>
           <button className="btn small" aria-label={`复制命令 ${row.command}`} onClick={() => report(host, async () => {
             await navigator.clipboard.writeText(row.command);
             host.toast("命令已复制");
           })}>复制</button>
-        </div>
+        </div>}
       </section>)}
     </div>
   </div>;

@@ -7,11 +7,13 @@ import { Dropdown } from "../components/Dropdown";
 import { useStore } from "../store";
 import { activeCommandTarget, executePanelCommand } from "../plugin/commandActions";
 import { filterSnippets, snippetCounts, snippetGroupId, type Snippet, type SnippetGroup } from "./snippetModel";
+import { CompactCommandsSwitch, useCompactCommands } from "./CompactCommandsSwitch";
 
 const ALL = "__all__";
 const blank = (groupId: string | null = null): Snippet => ({ id: "", title: "", body: "", groupId, sortOrder: 0, updatedAt: 0, createdAt: 0, deleted: false, dirty: true });
 
 export default function Snippets({ host }: { host: Host }) {
+  const [compact, setCompact] = useCompactCommands(host.id);
   const [rows, setRows] = useState<Snippet[]>([]);
   const [groups, setGroups] = useState<SnippetGroup[]>([]);
   const [group, setGroup] = useState(ALL);
@@ -37,8 +39,8 @@ export default function Snippets({ host }: { host: Host }) {
   const shown = filterSnippets(rows, groups, group, query);
   const counts = useMemo(() => snippetCounts(rows, groups), [rows, groups]);
   const items = [{ id: ALL, name: "全部" }, { id: "", name: "未分组" }, ...groups];
-  return <div className="plugin-stack snippets-panel">
-    <div className="snippet-toolbar"><span className="muted">{target ? `当前终端：${target.title || target.sessionTitle || "终端"}` : "请先选中本地或 SSH 终端"}</span><button className="btn small" onClick={() => setManage(true)}>管理命令</button></div>
+  return <div className={`plugin-stack snippets-panel${compact ? " compact-commands" : ""}`}>
+    <div className="snippet-toolbar"><span className="muted">{target ? `当前终端：${target.title || target.sessionTitle || "终端"}` : "请先选中本地或 SSH 终端"}</span><div className="command-view-actions"><button className="btn small" onClick={() => setManage(true)}>管理命令</button><CompactCommandsSwitch compact={compact} onChange={setCompact} label="常用命令" /></div></div>
     <div className="snippet-tabs" role="tablist" aria-label="常用命令分组">
       {items.map((item, index) => <button key={item.id} role="tab" aria-selected={group === item.id} tabIndex={group === item.id ? 0 : -1} className={group === item.id ? "selected" : ""}
         onClick={() => setGroup(item.id)} onKeyDown={event => {
@@ -54,7 +56,7 @@ export default function Snippets({ host }: { host: Host }) {
         if (sending) return;
         setSending(true);
         void executePanelCommand(host, snippet.body).catch(error => { if (!host.signal.aborted) host.toast(String(error), true); }).finally(() => setSending(false));
-      }}><strong>{snippet.title}</strong><pre>{snippet.body}</pre><span className="muted">点击执行</span></button>)}
+      }}>{!compact && <strong>{snippet.title}</strong>}<pre>{snippet.body}</pre>{!compact && <span className="muted">点击执行</span>}</button>)}
     </div>
     {manage && createPortal(<div className="snippet-manager-layer"><SnippetManager host={host} rows={rows} groups={groups} initialGroup={group} reload={reload} onClose={() => setManage(false)} /></div>, document.body)}
   </div>;
