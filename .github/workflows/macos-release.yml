@@ -1,5 +1,5 @@
-name: macOS Release
-run-name: macOS Release · ${{ inputs.version || '自动递增版本' }}
+name: Desktop Release
+run-name: Desktop Release · ${{ inputs.version || '自动递增版本' }}
 
 on:
   workflow_dispatch:
@@ -104,9 +104,54 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-windows:
+    name: 构建 Windows · x64
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      TERMONE_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RUST_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          workspaces: '. -> target'
+          key: windows-x64
+      - run: npm ci --no-audit --no-fund
+      - name: 类型检查
+        run: npm run check
+      - name: 前端回归测试
+        run: npm run test:desktop
+      - name: 核心与原生测试
+        run: cargo test --workspace --locked
+      - name: 构建同一版本的 Windows 安装包
+        run: npm run tauri --workspace @termone/desktop -- build --target $env:RUST_TARGET --bundles 'nsis,msi' -- --locked
+      - name: 校验架构、版本和安装包并生成校验文件
+        run: node scripts/package-windows.mjs
+      - name: Windows 安装包静默安装验证
+        run: ./scripts/test-windows-installer.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
     name: 发布 GitHub Release
-    needs: [prepare, build]
+    needs: [prepare, build, build-windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -124,7 +169,12 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: macos-*
+          pattern: '*-x64'
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-aarch64
           path: release-assets
           merge-multiple: true
       - name: 校验全部附件并公开发布

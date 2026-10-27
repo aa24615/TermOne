@@ -11,11 +11,15 @@ for arch in aarch64 x64; do
   test -s "TermOne_${RELEASE_VERSION}_${arch}.app.zip"
   test -s "TermOne_${RELEASE_VERSION}_${arch}.sha256"
 done
+test -s "TermOne_${RELEASE_VERSION}_windows_x64-setup.exe"
+test -s "TermOne_${RELEASE_VERSION}_windows_x64.msi"
+test -s "TermOne_${RELEASE_VERSION}_windows_x64.sha256"
 sha256sum -c ./*.sha256
 cat ./*.sha256 > SHA256SUMS.txt
 cat > release-notes.md <<EOF
-## macOS 安装包
+## 桌面安装包
 
+- Windows x64：下载 windows_x64-setup.exe（中文安装向导）或 windows_x64.msi。
 - Apple Silicon（M1/M2/M3/M4 等）：下载文件名含 aarch64 的 DMG。
 - Intel Mac：下载文件名含 x64 的 DMG。
 - 打开 DMG，将 TermOne 拖入 Applications；也可使用对应架构的 app.zip。
@@ -25,6 +29,8 @@ cat > release-notes.md <<EOF
 
 应用采用 ad-hoc 签名并通过本机签名及 DMG 完整性检查，尚未进行 Apple Developer 签名或公证。首次打开可能需要在 macOS「隐私与安全性」中确认。
 
+Windows 安装包通过 x64 架构、应用版本、文件格式及 NSIS 静默安装校验；暂未配置 Windows 代码签名证书。
+
 由 GitHub Actions 构建并发布。版本：${RELEASE_TAG}。
 EOF
 if gh release view "$RELEASE_TAG" --json isDraft > existing-release.json 2>/dev/null; then
@@ -32,7 +38,7 @@ if gh release view "$RELEASE_TAG" --json isDraft > existing-release.json 2>/dev/
 else
   gh release create "$RELEASE_TAG" --verify-tag --draft --title "TermOne $RELEASE_TAG" --notes-file release-notes.md
 fi
-gh release upload "$RELEASE_TAG" ./*.dmg ./*.app.zip SHA256SUMS.txt --clobber
+gh release upload "$RELEASE_TAG" ./*.dmg ./*.app.zip ./*.exe ./*.msi SHA256SUMS.txt --clobber
 # All architectures and checksums are uploaded before making the release public.
 gh release edit "$RELEASE_TAG" --draft=false --latest --title "TermOne $RELEASE_TAG" --notes-file release-notes.md
 gh release view "$RELEASE_TAG" --json url,assets --jq '{url,assets:[.assets[]|{name,size}]}'

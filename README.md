@@ -104,11 +104,11 @@ docker run -d -p 8787:8787 -v termone-data:/data \
 
 ## 发版与打包
 
-### GitHub Actions（macOS 自动打包与发布）
+### GitHub Actions（Windows / macOS 自动打包与发布）
 
-进入 GitHub 仓库 **Actions → macOS Release → Run workflow**，选择 `main`。版本号留空会在源码与已预留标签的最高版本上递增补丁号；也可指定更高的 `X.Y.Z`。流水线先提交统一的版本文件并原子推送版本标签，再从这个固定提交分别在 Apple Silicon / Intel runner 上执行测试、构建和校验。两个架构都成功后，才公开 GitHub Release。
+进入 GitHub 仓库 **Actions → Desktop Release → Run workflow**，选择 `main`。版本号留空会在源码与已预留标签的最高版本上递增补丁号；也可指定更高的 `X.Y.Z`。流水线先提交统一的版本文件并原子推送版本标签，再从这个固定提交分别在 Windows x64、macOS Apple Silicon / Intel runner 上执行测试、构建和校验。三个构建任务都成功后，才公开 GitHub Release。
 
-Release 包含两种架构的 DMG、应用 ZIP 和 `SHA256SUMS.txt`。DMG 直接生成，不依赖 Finder 自动排版；应用做 ad-hoc 签名，未配置 Apple Developer 签名或公证。仅使用仓库自带 `GITHUB_TOKEN`，无需个人访问令牌或自托管 macOS 节点。构建任务只有读取权限，预留版本和发布任务拥有写入 Release 所需的 `contents: write` 权限。
+Release 包含 Windows x64 的 NSIS `.exe`（中文安装向导）、`.msi`，macOS 两种架构的 DMG、应用 ZIP 和统一的 `SHA256SUMS.txt`。Windows 在 `windows-2022` 云端节点原生构建，检查 EXE 的 x64 架构与版本、安装包文件格式，并静默安装 NSIS 包核对实际安装的应用版本。Windows 暂未配置代码签名证书。DMG 直接生成，不依赖 Finder 自动排版；macOS 应用做 ad-hoc 签名，未配置 Apple Developer 签名或公证。仅使用仓库自带 `GITHUB_TOKEN`，无需个人访问令牌或自托管节点。构建任务只有读取权限，预留版本和发布任务拥有写入 Release 所需的 `contents: write` 权限。
 
 发版整体串行；失败版本保留，重新发起工作流会继续递增，防止重复占用同一版本。也可以在 GitHub 界面对同一次运行选择“重新运行失败的作业”，继续该次已经预留的版本。源码与标签不会被强制覆盖。
 
@@ -120,7 +120,7 @@ git merge --ff-only github/main
 git push origin main
 ```
 
-工作流：`.github/workflows/macos-release.yml`；版本预留、macOS 制品生成和 Release 发布分别由 `scripts/github-release-version.mjs`、`scripts/package-macos.mjs`、`scripts/publish-github-release.sh` 实现。
+工作流保留原路径 `.github/workflows/macos-release.yml`（显示名称为 Desktop Release）；版本预留、macOS / Windows 制品生成和 Release 发布分别由 `scripts/github-release-version.mjs`、`scripts/package-macos.mjs` / `scripts/package-windows.mjs`、`scripts/publish-github-release.sh` 实现。Windows 安装验证脚本为 `scripts/test-windows-installer.ps1`。
 
 ### 本地版本规则与 CNB 流水线
 
