@@ -1,6 +1,7 @@
 //! TermOne 核心库：本地 PTY / SSH / 串口会话、SQLite 存储与系统密钥环。
 
 pub mod error;
+pub mod metrics;
 pub mod history;
 pub mod plugin;
 pub mod reconnect;
@@ -11,6 +12,10 @@ pub mod storage;
 pub mod ssh_import;
 
 pub use error::{Result, TermError};
+pub use metrics::{
+    CpuSnapshot, DiskUsage, LoadAvg, MemInfo, MemorySnapshot, NetInterface, NetRate, SizeUnit,
+    TopSnapshot,
+};
 pub use history::{matches_query, search_history, HistoryEntry, HistoryQuery};
 pub use plugin::{
     validate_tpk, AuditEvent, AuditKind, Decision, HostApiVersion, PermissionChecker, PluginManifest,
