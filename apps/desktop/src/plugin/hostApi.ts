@@ -112,6 +112,8 @@ export function createHost(plugin: Installed): Host {
     authorize,
     sessions,
     async invoke<T>(command: string, args = {}) {
+      if (command.startsWith("history_") && (plugin.source !== "builtin" || plugin.id !== "com.termone.command-history" || application))
+        throw new Error("命令历史仅对内置历史命令插件开放");
       assert({ type: "ipc", command });
       if (!IPC_ALLOW.has(command)) throw new Error("IPC 对插件禁用");
       const result = await invoke<T>("plugin_call", {

@@ -19,6 +19,15 @@ import { createHost } from "../apps/desktop/src/plugin/hostApi.ts";
 import { DEFAULT_SETTINGS } from "../apps/desktop/src/types.ts";
 import { zipSync } from "fflate";
 
+test("command history cannot be accessed by other plugins or imported packages impersonating the built-in", async () => {
+  const permission = [{ type: "ipc", command: "history_recent" }];
+  for (const [id, source] of [["org.example.test", "builtin"], ["com.termone.command-history", "local"], ["com.termone.command-history", "market"]]) {
+    const host = createHost({ id, source, enabled: true, manifest: { ...manifest, id, permissions: permission } });
+    await assert.rejects(host.invoke("history_recent"), /仅对内置/);
+    host.dispose();
+  }
+});
+
 globalThis.window = globalThis;
 globalThis.localStorage = {
   getItem: () => null,

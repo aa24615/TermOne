@@ -103,6 +103,44 @@
     "kind": "plugin"
   },
   {
+    "id": "com.termone.command-history",
+    "name": "历史命令",
+    "version": "0.1.0",
+    "entry": "index.js",
+    "hostApi": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "permissions": [
+      {
+        "type": "ui-panel"
+      },
+      {
+        "type": "ui-toast"
+      },
+      {
+        "type": "session-read"
+      },
+      {
+        "type": "ipc",
+        "command": "history_add"
+      },
+      {
+        "type": "ipc",
+        "command": "history_recent"
+      },
+      {
+        "type": "ipc",
+        "command": "history_clear"
+      }
+    ],
+    "description": "记录已提交的终端命令，相同命令去重，仅在本机保存",
+    "author": "TermOne",
+    "files": ["index.js"],
+    "kind": "plugin"
+  },
+  {
     "id": "com.termone.session-log",
     "name": "会话日志回放",
     "version": "0.1.0",

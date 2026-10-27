@@ -59,6 +59,9 @@ const IPC: &[&str] = &[
     "snippet_save",
     "snippet_delete",
     "theme_install",
+    "history_add",
+    "history_recent",
+    "history_clear",
 ];
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -490,9 +493,16 @@ mod tests {
         assert!(!INFLIGHT.lock().unwrap().contains_key(id));
     }
     #[test]
+    fn command_history_is_only_accessible_to_its_bundled_plugin() {
+        assert!(history_access("com.termone.command-history", "builtin"));
+        assert!(!history_access("com.termone.command-history", "local"));
+        assert!(!history_access("com.termone.command-history", "market"));
+        assert!(!history_access("com.termone.sftp", "builtin"));
+    }
+    #[test]
     fn every_bundled_manifest_is_valid_and_does_not_request_secrets() {
         let catalog: Vec<Value> = serde_json::from_str(CATALOG).unwrap();
-        assert_eq!(catalog.len(), 9);
+        assert_eq!(catalog.len(), 10);
         for value in catalog {
             let m = parse(&value).unwrap();
             assert!(!m
@@ -613,7 +623,8 @@ pub async fn plugin_call(
     ensure_context(&app, &window, &id)?;
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
-    let allowed = IPC.contains(&command.as_str()) && m.allows_ipc(&command);
+    let allowed = IPC.contains(&command.as_str()) && m.allows_ipc(&command)
+        && (!command.starts_with("history_") || history_access(&id, v["source"].as_str().unwrap_or("")));
     audit(&app, &id, &command, allowed);
     if !allowed {
         return Err(format!("扩展无权调用: {command}"));
@@ -756,8 +767,29 @@ pub fn plugin_denied(app: AppHandle, id: String, action: String) -> Result<()> {
     audit(&app, &id, &action, false);
     Ok(())
 }
+fn history_access(id: &str, source: &str) -> bool {
+    id == "com.termone.command-history" && source == "builtin"
+}
 fn dispatch(app: &AppHandle, id: &str, cmd: &str, args: Value) -> Result<Value> {
     let state = app.state::<AppState>();
+    if cmd.starts_with("history_") {
+        let approval = approved(app, id, true)?;
+        if !history_access(id, approval["source"].as_str().unwrap_or("")) {
+            return Err("命令历史仅对内置历史命令插件开放".into());
+        }
+        let db = state.db.lock().map_err(err)?;
+        return match cmd {
+            "history_add" => {
+                let session = uuid::Uuid::parse_str(field(&args, "sessionId")?).map_err(err)?;
+                if !state.sessions.exists(session) { return Err("会话已结束".into()); }
+                db.history_add(field(&args, "command")?, args["hostId"].as_str()).map_err(err)?;
+                Ok(Value::Null)
+            }
+            "history_recent" => Ok(json!(db.history_recent(args["query"].as_str().unwrap_or(""), 500).map_err(err)?)),
+            "history_clear" => { db.history_clear().map_err(err)?; Ok(Value::Null) }
+            _ => Err("未知历史命令能力".into()),
+        };
+    }
     if cmd == "profile_refs" {
         let rows = state.db.lock().map_err(err)?.profile_list().map_err(err)?;
         return Ok(json!(rows

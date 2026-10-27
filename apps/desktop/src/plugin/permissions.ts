@@ -15,6 +15,9 @@ export const IPC_ALLOW = new Set([
   "snippet_save",
   "snippet_delete",
   "theme_install",
+  "history_add",
+  "history_recent",
+  "history_clear",
 ]);
 export function describePermission(p: Permission): string {
   const labels: Record<string, string> = {

@@ -31,6 +31,7 @@ export class TerminalInputGuard {
   private pending = false;
   private disposed = false;
   private pasting = false;
+  private historyPrompt: string | null = null;
   private controller = new AbortController();
   constructor(
     private options: {
@@ -40,19 +41,21 @@ export class TerminalInputGuard {
         text: string,
         signal: AbortSignal,
       ): Promise<boolean>;
-      send(data: string): void;
+      send(data: string): void | boolean;
       paste(text: string): void;
       visibleLine(): string;
       error(message: string): void;
       focus?(): void;
+      historyEnabled?(): boolean;
+      submitted?(entry: { command: string; prompt: string; uncertain: boolean }): void;
     },
   ) {}
 
   input(data: string) {
     if (this.disposed) return;
+    this.capturePrompt();
     if (this.pasting) {
-      this.track(stripPaste(data));
-      this.options.send(data);
+      this.forward(data, stripPaste(data), data.startsWith("\x1b[200~"));
       return;
     }
     if (this.pending) return;
@@ -69,19 +72,18 @@ export class TerminalInputGuard {
         !this.unknown &&
         this.approved === this.line
       ) {
-        this.track(plain);
-        this.options.send(data);
+        this.forward(data, plain);
         return;
       }
       void this.checked(data, plain, false);
     } else {
-      this.track(plain);
-      this.options.send(data);
+      this.forward(data, plain);
     }
   }
 
   paste(text: string) {
     if (this.disposed || this.pending) return;
+    this.capturePrompt();
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) {
       this.options.error("粘贴包含终端控制字符，请改用纯文本");
       return;
@@ -123,8 +125,7 @@ export class TerminalInputGuard {
           this.pasting = false;
         }
       } else {
-        this.track(plain);
-        this.options.send(data);
+        this.forward(data, plain);
       }
       if (!this.unknown) this.approved = this.line;
     } catch (e) {
@@ -135,7 +136,22 @@ export class TerminalInputGuard {
     }
   }
 
-  private track(data: string) {
+  private capturePrompt() {
+    if (this.historyPrompt === null && !this.line && !this.unknown && this.options.historyEnabled?.())
+      this.historyPrompt = this.options.visibleLine();
+  }
+
+  private forward(data: string, plain: string, bracketedPaste = false) {
+    const submitted: { command: string; prompt: string; uncertain: boolean }[] = [];
+    this.track(plain, submitted, bracketedPaste);
+    if (this.options.send(data) !== false) {
+      for (const entry of submitted) {
+        try { this.options.submitted?.(entry); } catch { /* History must never interrupt input. */ }
+      }
+    }
+  }
+
+  private track(data: string, submitted: { command: string; prompt: string; uncertain: boolean }[], bracketedPaste: boolean) {
     this.approved = null;
     if (data.startsWith("\x1b")) {
       if (data === "\x1b[D" || data === "\x1bOD")
@@ -159,6 +175,11 @@ export class TerminalInputGuard {
     for (const ch of data) {
       if (ch === "\r" || ch === "\n" || ch === "\x03" || ch === "\x04") {
         const continuation = ch === "\r" || ch === "\n";
+        if (continuation && bracketedPaste) {
+          this.line = this.line.slice(0, this.cursor) + "\n" + this.line.slice(this.cursor);
+          this.cursor++;
+          continue;
+        }
         const slashes = this.line.match(/\\+$/)?.[0].length ?? 0;
         if (continuation && slashes % 2 === 1) {
           this.line = this.line.slice(0, -1);
@@ -182,9 +203,12 @@ export class TerminalInputGuard {
             this.line += "\n";
             this.cursor = this.line.length;
           } else {
+            if (continuation && this.historyPrompt !== null && this.options.historyEnabled?.())
+              submitted.push({ command: this.line, prompt: this.historyPrompt, uncertain: this.unknown });
             this.line = "";
             this.cursor = 0;
             this.unknown = false;
+            this.historyPrompt = null;
           }
         }
       } else if (ch === "\x7f" || ch === "\b") {
@@ -223,6 +247,7 @@ export class TerminalInputGuard {
     this.disposed = true;
     this.controller.abort();
     this.line = "";
+    this.historyPrompt = null;
     this.approved = null;
   }
 }

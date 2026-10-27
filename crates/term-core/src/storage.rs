@@ -480,8 +480,13 @@ impl Db {
     /// 记录一次命令执行。相同 (command, host_id) 命中时累加使用次数并刷新最近时间戳；
     /// 否则新建一条记录。本地命令的 `host_id` 传 `None`。
     pub fn history_add(&self, command: &str, host_id: Option<&str>) -> Result<()> {
-        let now = now_ms();
+        let command = command.trim();
+        if command.is_empty() || command.len() > 65536 || command.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+            return Err(TermError::Other("历史命令为空、过长或包含控制字符".into()));
+        }
         let conn = self.conn.lock().unwrap();
+        let latest: i64 = conn.query_row("SELECT coalesce(MAX(last_used_at),0) FROM command_history", [], |r| r.get(0)).map_err(TermError::Db)?;
+        let now = now_ms().max(latest.saturating_add(1));
         let existing: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM command_history WHERE command = ?1 AND coalesce(host_id,'') = coalesce(?2,'')",
@@ -533,6 +538,21 @@ impl Db {
     /// 返回最近的历史记录（最多 `limit` 条，全局，不含主机过滤）。
     pub fn history_list(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
         Ok(self.history_load_all()?.into_iter().take(limit as usize).collect())
+    }
+
+    /// Sidebar feed: exact command deduplication across hosts, most recently submitted first.
+    /// Keep case distinct: shell commands and paths can be case-sensitive.
+    pub fn history_recent(&self, query: &str, limit: u32) -> Result<Vec<HistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT command, SUM(use_count), MAX(last_used_at) FROM command_history \
+             WHERE instr(lower(command),lower(?1)) > 0 \
+             GROUP BY command COLLATE BINARY ORDER BY MAX(last_used_at) DESC LIMIT ?2"
+        ).map_err(TermError::Db)?;
+        let rows = stmt.query_map(params![query.trim(), limit.min(500)], |r| Ok(HistoryEntry {
+            command: r.get(0)?, host_id: None, use_count: r.get(1)?, timestamp: r.get(2)?,
+        })).map_err(TermError::Db)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(TermError::Db)
     }
 
     /// 检索命令历史：加载全部后委托纯函数 `search_history` 做匹配 / 排序 / 主机隔离。
@@ -2326,6 +2346,28 @@ mod tests {
     }
 
     // ---------------- 命令历史（R-24 / R-38） ----------------
+    #[test]
+    fn recent_history_deduplicates_across_hosts_and_moves_repeats_to_front() {
+        let db = tmp_db();
+        db.history_add("ls -la", Some("a")).unwrap();
+        db.history_add("ls -la", Some("b")).unwrap();
+        db.history_add("echo Hello", None).unwrap();
+        db.history_add("echo hello", None).unwrap();
+        db.history_add("  ls -la  ", Some("a")).unwrap();
+        let rows = db.history_recent("", 500).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].command, "ls -la");
+        assert_eq!(rows[0].use_count, 3);
+        assert_eq!(rows[1].command, "echo hello");
+        assert_eq!(rows[2].command, "echo Hello");
+        assert_eq!(db.history_recent("HELLO", 500).unwrap().len(), 2);
+        assert!(db.history_recent("' OR 1=1 --", 500).unwrap().is_empty());
+        assert!(db.history_recent("", 0).unwrap().is_empty());
+        assert!(db.history_add("  ", None).is_err());
+        assert!(db.history_add("hidden\u{1b}[A", None).is_err());
+        db.history_clear().unwrap();
+        assert!(db.history_recent("", 500).unwrap().is_empty());
+    }
     #[test]
     fn history_add_inserts_then_increments_count_on_repeat() {
         let db = tmp_db();

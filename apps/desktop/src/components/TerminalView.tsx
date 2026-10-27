@@ -13,6 +13,7 @@ import type { Pane } from "../types";
 import { TerminalInputGuard, RISK_REASONS } from "../terminalInputGuard";
 import { confirm } from "./Dialog";
 import { registerTerminal } from "../plugin/terminalBridge";
+import { historyRecording, notifyCommand, resolveSubmittedCommand } from "../commandHistory";
 
 export function TerminalView({
   pane,
@@ -59,6 +60,16 @@ export function TerminalView({
 
     const sessionId = pane.sessionId;
     const bridge = sessionId ? registerTerminal(sessionId, term) : null;
+    const visibleLine = () => {
+      const buffer = term.buffer.active;
+      let at = buffer.baseY + buffer.cursorY;
+      let text = buffer.getLine(at)?.translateToString(true) ?? "";
+      for (let n = 0; n < 32 && at > 0 && buffer.getLine(at)?.isWrapped; n++) {
+        at--;
+        text = (buffer.getLine(at)?.translateToString(true) ?? "") + text;
+      }
+      return text;
+    };
     const guard = new TerminalInputGuard({
       check: ipc.commandCheck,
       confirm: (check, text, signal) =>
@@ -86,17 +97,15 @@ export function TerminalView({
           void ipc
             .sessionWrite(sessionId, toB64(input))
             .catch((e) => useStore.getState().showToast(String(e), "error"));
+        return !!sessionId && input !== null;
       },
       paste: (text) => term.paste(text),
-      visibleLine: () => {
-        const buffer = term.buffer.active;
-        let at = buffer.baseY + buffer.cursorY;
-        let text = buffer.getLine(at)?.translateToString(true) ?? "";
-        for (let n = 0; n < 8 && at > 0 && buffer.getLine(at)?.isWrapped; n++) {
-          at--;
-          text = (buffer.getLine(at)?.translateToString(true) ?? "") + text;
-        }
-        return text;
+      visibleLine,
+      historyEnabled: historyRecording,
+      submitted: (entry) => {
+        if (!sessionId || !["local", "ssh"].includes(pane.kind)) return;
+        const command = resolveSubmittedCommand(entry, visibleLine(), term.buffer.active.type === "alternate");
+        if (command) notifyCommand({ sessionId, command });
       },
       error: (message) => useStore.getState().showToast(message, "error"),
       focus: () => {

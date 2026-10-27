@@ -331,3 +331,11 @@
   max-height: 180px;
   overflow: auto;
 }
+.history-summary { align-items: center; justify-content: space-between; }
+.history-summary > span { font-size: 12px; }
+.history-list { display: flex; flex-direction: column; }
+.history-entry { padding: 12px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.history-entry:first-child { padding-top: 0; }
+.history-entry pre { margin: 0 0 8px; font: 12px/1.6 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.history-entry-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--fg-dim); font-size: 11px; }
+.history-empty { padding: 24px 4px; text-align: center; }

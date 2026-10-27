@@ -10,6 +10,7 @@ import type { Host, Installed, PluginModule } from "./types";
 const modules: Record<string, () => Promise<PluginModule>> = {
   "com.termone.sftp": () => import("../applications/sftp"),
   "com.termone.snippets": () => import("../plugins/snippets"),
+  "com.termone.command-history": () => import("../plugins/command-history"),
   "com.termone.session-log": () => import("../applications/session-log"),
   "com.termone.broadcast": () => import("../plugins/broadcast"),
   "com.termone.ai-assist": () => import("../applications/ai-assist"),
@@ -19,6 +20,7 @@ const modules: Record<string, () => Promise<PluginModule>> = {
   "com.termone.zmodem": () => import("../plugins/zmodem"),
 };
 const background = new Set([
+  "com.termone.command-history",
   "com.termone.triggers",
   "com.termone.quake",
   "com.termone.zmodem",
