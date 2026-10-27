@@ -24,5 +24,5 @@ pub use session::{
     SessionRequest, SshAuth,
 };
 pub use storage::{
-    BackupStats, Db, GroupRow, PluginRow, ProfileRow, SettingRow, SnippetRow, SyncItem,
+    BackupStats, Db, GroupRow, PluginRow, ProfileRow, SettingRow, SnippetRow, SnippetGroup, SyncItem,
 };

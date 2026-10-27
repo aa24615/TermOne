@@ -125,7 +125,7 @@ export function createHost(plugin: Installed): Host {
         await useStore.getState().loadSettings();
         await useStore.getState().saveSetting("theme", "custom");
       }
-      if (["snippet_save", "snippet_delete", "theme_install"].includes(command))
+      if (["snippet_save", "snippet_delete", "snippet_group_save", "snippet_group_delete", "theme_install"].includes(command))
         scheduleSync();
       return result;
     },

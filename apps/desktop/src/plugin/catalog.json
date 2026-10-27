@@ -67,7 +67,7 @@
   {
     "id": "com.termone.snippets",
     "name": "常用命令",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "entry": "index.js",
     "hostApi": {
       "major": 1,
@@ -95,9 +95,21 @@
       {
         "type": "ipc",
         "command": "snippet_delete"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_group_list"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_group_save"
+      },
+      {
+        "type": "ipc",
+        "command": "snippet_group_delete"
       }
     ],
-    "description": "保存并同步命令片段，预览后发送到选定会话",
+    "description": "按分组快捷执行命令，在独立弹窗中管理命令与分组",
     "author": "TermOne",
     "files": ["index.js"],
     "kind": "plugin"
@@ -105,7 +117,7 @@
   {
     "id": "com.termone.command-history",
     "name": "历史命令",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "entry": "index.js",
     "hostApi": {
       "major": 1,
@@ -133,6 +145,9 @@
       {
         "type": "ipc",
         "command": "history_clear"
+      },
+      {
+        "type": "session-write"
       }
     ],
     "description": "记录已提交的终端命令，相同命令去重，仅在本机保存",

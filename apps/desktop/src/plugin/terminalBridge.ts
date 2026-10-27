@@ -9,6 +9,16 @@ const cleanups = new Map<
 >();
 const observers = new Set<(id: string, text: string) => void>();
 const inputs = new Set<(id: string, text: string) => void>();
+const commandSenders = new Map<string, (command: string, signal?: AbortSignal) => Promise<boolean>>();
+export function registerCommandSender(id: string, sender: (command: string, signal?: AbortSignal) => Promise<boolean>) {
+  commandSenders.set(id, sender);
+  return () => { if (commandSenders.get(id) === sender) commandSenders.delete(id); };
+}
+export function executeTerminalCommand(id: string, command: string, signal?: AbortSignal): Promise<boolean> {
+  const sender = commandSenders.get(id);
+  if (!sender) throw new Error("终端尚未准备好或已关闭");
+  return sender(command, signal);
+}
 export function observeOutput(cb: (id: string, text: string) => void): Dispose {
   observers.add(cb);
   return () => {

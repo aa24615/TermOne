@@ -12,8 +12,9 @@ import { getTermTheme } from "../themes";
 import type { Pane } from "../types";
 import { TerminalInputGuard, RISK_REASONS } from "../terminalInputGuard";
 import { confirm } from "./Dialog";
-import { registerTerminal } from "../plugin/terminalBridge";
+import { registerTerminal, registerCommandSender } from "../plugin/terminalBridge";
 import { historyRecording, notifyCommand, resolveSubmittedCommand } from "../commandHistory";
+import { activeCommandTarget } from "../plugin/commandActions";
 
 export function TerminalView({
   pane,
@@ -60,6 +61,8 @@ export function TerminalView({
 
     const sessionId = pane.sessionId;
     const bridge = sessionId ? registerTerminal(sessionId, term) : null;
+    let panelExecution = false;
+    let panelSignal: AbortSignal | undefined;
     const visibleLine = () => {
       const buffer = term.buffer.active;
       let at = buffer.baseY + buffer.cursorY;
@@ -92,6 +95,10 @@ export function TerminalView({
           signal,
         ),
       send: (data) => {
+        if (panelExecution && (panelSignal?.aborted || activeCommandTarget(useStore.getState())?.sessionId !== sessionId)) {
+          useStore.getState().showToast("活动终端或插件状态已变化，命令未发送", "error");
+          return false;
+        }
         const input = bridge ? bridge.input(data) : data;
         if (sessionId && input !== null)
           void ipc
@@ -103,7 +110,7 @@ export function TerminalView({
       visibleLine,
       historyEnabled: historyRecording,
       submitted: (entry) => {
-        if (!sessionId || !["local", "ssh"].includes(pane.kind)) return;
+        if (panelExecution || !sessionId || !["local", "ssh"].includes(pane.kind)) return;
         const command = resolveSubmittedCommand(entry, visibleLine(), term.buffer.active.type === "alternate");
         if (command) notifyCommand({ sessionId, command });
       },
@@ -112,6 +119,19 @@ export function TerminalView({
         if (useStore.getState().activePaneId === pane.id) term.focus();
       },
     });
+    const removeCommandSender = sessionId ? registerCommandSender(sessionId, async (command, signal) => {
+      if (signal?.aborted) return false;
+      if (!["local", "ssh"].includes(pane.kind) || term.buffer.active.type === "alternate")
+        throw new Error("请切换到本地或 SSH 的普通命令行后再执行");
+      panelExecution = true;
+      panelSignal = signal;
+      try {
+        const accepted = await guard.execute(command);
+        const recorded = command.replace(/\r\n?/g, "\n").trim();
+        if (accepted && recorded.length <= 16_384 && historyRecording()) notifyCommand({ sessionId, command: recorded });
+        return accepted;
+      } finally { panelExecution = false; panelSignal = undefined; }
+    }) : () => {};
     const onPaste = (event: ClipboardEvent) => {
       if (!event.clipboardData) return;
       event.preventDefault();
@@ -167,6 +187,7 @@ export function TerminalView({
       unExit = onSessionExit(sessionId, (code) => {
         if (pendingChunks.length > 0) flushPending();
         guard.dispose();
+        removeCommandSender();
         term.write("\r\n\x1b[2m── 会话已结束 ──\x1b[0m\r\n");
         useStore.getState().markSessionExit(sessionId, code);
       });
@@ -191,6 +212,7 @@ export function TerminalView({
 
     return () => {
       guard.dispose();
+      removeCommandSender();
       host.removeEventListener("paste", onPaste, true);
       bridge?.dispose();
       dataDisposer.dispose();

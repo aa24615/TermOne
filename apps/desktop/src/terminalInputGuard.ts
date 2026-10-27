@@ -31,6 +31,7 @@ export class TerminalInputGuard {
   private pending = false;
   private disposed = false;
   private pasting = false;
+  private pasteAccepted = true;
   private historyPrompt: string | null = null;
   private controller = new AbortController();
   constructor(
@@ -55,7 +56,7 @@ export class TerminalInputGuard {
     if (this.disposed) return;
     this.capturePrompt();
     if (this.pasting) {
-      this.forward(data, stripPaste(data), data.startsWith("\x1b[200~"));
+      if (!this.forward(data, stripPaste(data), data.startsWith("\x1b[200~"))) this.pasteAccepted = false;
       return;
     }
     if (this.pending) return;
@@ -81,14 +82,26 @@ export class TerminalInputGuard {
     }
   }
 
-  paste(text: string) {
-    if (this.disposed || this.pending) return;
+  async paste(text: string): Promise<boolean> {
+    if (this.disposed || this.pending) return false;
     this.capturePrompt();
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) {
       this.options.error("粘贴包含终端控制字符，请改用纯文本");
-      return;
+      return false;
     }
-    void this.checked(text, text, true);
+    return this.checked(text, text, true);
+  }
+
+  async execute(text: string): Promise<boolean> {
+    if (this.disposed || this.pending) return false;
+    if (this.line || this.unknown) {
+      this.options.error("终端中有未提交的输入，请先执行或清空后再发送命令");
+      return false;
+    }
+    const command = text.replace(/\r\n?/g, "\n").replace(/[\r\n]+$/, "");
+    if (!command.trim() || !(await this.paste(command)) || this.disposed) return false;
+    if (!this.unknown && this.approved === this.line) return this.forward("\r", "\r");
+    return this.checked("\r", "\r", false);
   }
 
   private async checked(data: string, plain: string, clipboard: boolean) {
@@ -103,7 +116,7 @@ export class TerminalInputGuard {
           plain +
           (this.unknown ? "" : prefix.slice(this.cursor));
       let result = await this.options.check(candidate.replace(/\r\n?/g, "\n"));
-      if (this.disposed) return;
+      if (this.disposed) return false;
       if (this.unknown)
         result = {
           ...result,
@@ -114,22 +127,26 @@ export class TerminalInputGuard {
         result.risk !== "safe" &&
         !(await this.options.confirm(result, candidate, this.controller.signal))
       )
-        return;
-      if (this.disposed) return;
+        return false;
+      if (this.disposed) return false;
       if (clipboard) {
         // xterm preserves the peer's bracketed-paste mode and does not add Enter.
         this.pasting = true;
+        this.pasteAccepted = true;
         try {
           this.options.paste(data);
         } finally {
           this.pasting = false;
         }
+        if (!this.pasteAccepted) return false;
       } else {
-        this.forward(data, plain);
+        if (!this.forward(data, plain)) return false;
       }
       if (!this.unknown) this.approved = this.line;
+      return true;
     } catch (e) {
       if (!this.disposed) this.options.error("输入未发送：" + String(e));
+      return false;
     } finally {
       this.pending = false;
       if (!this.disposed) this.options.focus?.();
@@ -142,13 +159,22 @@ export class TerminalInputGuard {
   }
 
   private forward(data: string, plain: string, bracketedPaste = false) {
+    const previous = { line: this.line, cursor: this.cursor, unknown: this.unknown, prompt: this.historyPrompt, approved: this.approved };
     const submitted: { command: string; prompt: string; uncertain: boolean }[] = [];
     this.track(plain, submitted, bracketedPaste);
-    if (this.options.send(data) !== false) {
+    const accepted = this.options.send(data) !== false;
+    if (accepted) {
       for (const entry of submitted) {
         try { this.options.submitted?.(entry); } catch { /* History must never interrupt input. */ }
       }
+    } else {
+      this.line = previous.line;
+      this.cursor = previous.cursor;
+      this.unknown = previous.unknown;
+      this.historyPrompt = previous.prompt;
+      this.approved = previous.approved;
     }
+    return accepted;
   }
 
   private track(data: string, submitted: { command: string; prompt: string; uncertain: boolean }[], bracketedPaste: boolean) {
@@ -229,7 +255,7 @@ export class TerminalInputGuard {
           .replace(/\s*\S+\s*$/, "");
         this.line = before + this.line.slice(this.cursor);
         this.cursor = before.length;
-      } else if (ch === "\t" || ch.charCodeAt(0) < 32) this.unknown = true;
+      } else if ((ch === "\t" && !bracketedPaste) || (ch.charCodeAt(0) < 32 && ch !== "\t")) this.unknown = true;
       else {
         this.line =
           this.line.slice(0, this.cursor) + ch + this.line.slice(this.cursor);

@@ -58,6 +58,9 @@ const IPC: &[&str] = &[
     "snippet_list",
     "snippet_save",
     "snippet_delete",
+    "snippet_group_list",
+    "snippet_group_save",
+    "snippet_group_delete",
     "theme_install",
     "history_add",
     "history_recent",
@@ -802,6 +805,9 @@ fn dispatch(app: &AppHandle, id: &str, cmd: &str, args: Value) -> Result<Value> 
         let db = state.db.lock().map_err(err)?;
         return match cmd {
             "snippet_list" => Ok(json!(db.snippet_list().map_err(err)?)),
+            "snippet_group_list" => Ok(json!(db.snippet_groups().map_err(err)?)),
+            "snippet_group_save" => Ok(json!(db.snippet_group_save(field(&args, "id")?, field(&args, "name")?).map_err(err)?)),
+            "snippet_group_delete" => Ok(json!(db.snippet_group_delete(field(&args, "id")?).map_err(err)?)),
             "snippet_save" => {
                 let s: SnippetRow = serde_json::from_value(args["snippet"].clone()).map_err(err)?;
                 Ok(json!(db.snippet_save(s).map_err(err)?))

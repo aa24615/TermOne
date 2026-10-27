@@ -64,6 +64,8 @@ pub struct GroupRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnippetRow {
+    #[serde(default)]
+    pub group_id: Option<String>,
     pub id: String,
     pub title: String,
     pub body: String,
@@ -248,6 +250,13 @@ fn ensure_column(conn: &Connection, table: &str, col: &str, def: &str) -> Result
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetGroup {
+    pub id: String,
+    pub name: String,
+}
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -312,6 +321,7 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA).map_err(TermError::Db)?;
         ensure_column(&conn, "profiles", "group_id", "TEXT")?;
+        ensure_column(&conn, "snippets", "group_id", "TEXT")?;
         ensure_column(&conn, "profiles", "last_used_at", "INTEGER NOT NULL DEFAULT 0")?;
         let db = Db {
             conn: Mutex::new(conn),
@@ -795,17 +805,58 @@ impl Db {
 
     // ---------------- snippets ----------------
 
+    pub fn snippet_groups(&self) -> Result<Vec<SnippetGroup>> {
+        let raw = self.setting_get("snippetGroups")?.unwrap_or_else(|| "[]".into());
+        serde_json::from_str(&raw).map_err(|e| TermError::Other(format!("命令分组数据无效：{e}")))
+    }
+
+    pub fn snippet_group_save(&self, id: &str, name: &str) -> Result<Vec<SnippetGroup>> {
+        let name = name.trim();
+        if id.is_empty() || id.len() > 128 || name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) || ["全部", "未分组"].contains(&name) {
+            return Err(TermError::Other("分组名称须为 1～64 个字符，且不能使用全部或未分组".into()));
+        }
+        let mut groups = self.snippet_groups()?;
+        if groups.iter().any(|g| g.id != id && g.name.eq_ignore_ascii_case(name)) {
+            return Err(TermError::Other("已有同名命令分组".into()));
+        }
+        if let Some(group) = groups.iter_mut().find(|g| g.id == id) { group.name = name.into(); }
+        else {
+            if groups.len() >= 200 { return Err(TermError::Other("命令分组最多 200 个".into())); }
+            groups.push(SnippetGroup { id: id.into(), name: name.into() });
+        }
+        let raw = serde_json::to_string(&groups).map_err(|e| TermError::Other(e.to_string()))?;
+        self.conn.lock().unwrap().execute("INSERT INTO settings (key,value,updated_at,dirty) VALUES ('snippetGroups',?1,?2,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=max(settings.updated_at+1,excluded.updated_at),dirty=1", params![raw, now_ms()])?;
+        Ok(groups)
+    }
+
+    /// Removing a group preserves commands and atomically moves them into Ungrouped.
+    pub fn snippet_group_delete(&self, id: &str) -> Result<Vec<SnippetGroup>> {
+        let mut groups = self.snippet_groups()?;
+        if !groups.iter().any(|g| g.id == id) { return Err(TermError::Other("命令分组不存在".into())); }
+        groups.retain(|g| g.id != id);
+        let raw = serde_json::to_string(&groups).map_err(|e| TermError::Other(e.to_string()))?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let latest: i64 = tx.query_row("SELECT max(coalesce((SELECT MAX(updated_at) FROM snippets WHERE group_id=?1),0),coalesce((SELECT updated_at FROM settings WHERE key='snippetGroups'),0))", [id], |r| r.get(0))?;
+        let now = now_ms().max(latest.saturating_add(1));
+        tx.execute("UPDATE snippets SET group_id = NULL, dirty = 1, updated_at = ?1 WHERE group_id = ?2 AND deleted = 0", params![now, id])?;
+        tx.execute("INSERT INTO settings (key,value,updated_at,dirty) VALUES ('snippetGroups',?1,?2,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,dirty=1", params![raw, now])?;
+        tx.commit()?;
+        Ok(groups)
+    }
+
     pub fn snippet_list(&self) -> Result<Vec<SnippetRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, title, body, sort_order, updated_at, created_at, deleted, dirty
+                "SELECT id, title, body, sort_order, updated_at, created_at, deleted, dirty, group_id
                  FROM snippets WHERE deleted = 0 ORDER BY sort_order ASC, title ASC",
             )
             .map_err(TermError::Db)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(SnippetRow {
+                    group_id: row.get(8)?,
                     id: row.get(0)?,
                     title: row.get(1)?,
                     body: row.get(2)?,
@@ -826,31 +877,37 @@ impl Db {
 
     /// 新增或更新片段。返回带时间戳与 dirty 标记的行。
     pub fn snippet_save(&self, mut s: SnippetRow) -> Result<SnippetRow> {
+        s.group_id = s.group_id.filter(|id| !id.is_empty());
+        if let Some(ref group_id) = s.group_id {
+            if !self.snippet_groups()?.iter().any(|g| &g.id == group_id) {
+                return Err(TermError::Other("命令分组已不存在，请重新选择".into()));
+            }
+        }
         let conn = self.conn.lock().unwrap();
-        let existing: Option<i64> = conn
+        let existing: Option<(i64, i64)> = conn
             .query_row(
-                "SELECT created_at FROM snippets WHERE id = ?1",
+                "SELECT created_at, updated_at FROM snippets WHERE id = ?1",
                 params![s.id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(TermError::Db)?;
-        let now = now_ms();
+        let now = now_ms().max(existing.map(|(_, updated)| updated.saturating_add(1)).unwrap_or(0));
         s.created_at = match existing {
-            Some(created) => created,
+            Some((created, _)) => created,
             None if s.created_at > 0 => s.created_at,
             None => now,
         };
         s.updated_at = now;
         s.dirty = true;
         conn.execute(
-            "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+            "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)
              ON CONFLICT(id) DO UPDATE SET
-               title = excluded.title, body = excluded.body, sort_order = excluded.sort_order,
+               title = excluded.title, body = excluded.body, group_id = excluded.group_id, sort_order = excluded.sort_order,
                updated_at = excluded.updated_at, created_at = excluded.created_at,
                deleted = excluded.deleted, dirty = 1",
-            params![s.id, s.title, s.body, s.sort_order, s.updated_at, s.created_at, s.deleted as i64],
+            params![s.id, s.title, s.body, s.sort_order, s.updated_at, s.created_at, s.deleted as i64, s.group_id],
         )
         .map_err(TermError::Db)?;
         Ok(s)
@@ -860,7 +917,7 @@ impl Db {
     pub fn snippet_delete(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE snippets SET deleted = 1, dirty = 1, updated_at = ?1 WHERE id = ?2",
+            "UPDATE snippets SET deleted = 1, dirty = 1, updated_at = max(updated_at+1,?1) WHERE id = ?2",
             params![now_ms(), id],
         )
         .map_err(TermError::Db)?;
@@ -1121,7 +1178,7 @@ impl Db {
         }
         {
             let mut stmt = conn
-                .prepare("SELECT id, title, body, sort_order, updated_at, deleted FROM snippets WHERE dirty = 1")
+                .prepare("SELECT id, title, body, sort_order, updated_at, deleted, group_id FROM snippets WHERE dirty = 1")
                 .map_err(TermError::Db)?;
             let rows = stmt
                 .query_map([], |row| {
@@ -1130,6 +1187,7 @@ impl Db {
                         "title": row.get::<_, String>(1)?,
                         "body": row.get::<_, String>(2)?,
                         "sortOrder": row.get::<_, i64>(3)?,
+                        "groupId": row.get::<_, Option<String>>(6)?,
                     });
                     Ok(SyncItem {
                         item_id: row.get(0)?,
@@ -1318,11 +1376,11 @@ impl Db {
                     }
                     let created = local_updated.map_or(now_ms(), |_| 0);
                     conn.execute(
-                        "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+                        "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty, group_id)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)
                          ON CONFLICT(id) DO UPDATE SET
-                           title = ?2, body = ?3, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 0",
-                        params![id, title, body, sort_order, item.updated_at, created, item.deleted as i64],
+                           title = ?2, body = ?3, group_id = ?8, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 0",
+                        params![id, title, body, sort_order, item.updated_at, created, item.deleted as i64, payload.get("groupId").and_then(|v| v.as_str())],
                     )
                     .map_err(TermError::Db)?;
                     applied += 1;
@@ -1541,9 +1599,9 @@ impl Db {
             }
             for s in &file.snippets {
                 conn.execute(
-                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![s.id, s.title, s.body, s.sort_order, now, now, 0i64, 1i64],
+                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty, group_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![s.id, s.title, s.body, s.sort_order, now, now, 0i64, 1i64, s.group_id],
                 )
                 .map_err(TermError::Db)?;
                 snippets_count += 1;
@@ -1647,10 +1705,10 @@ impl Db {
                     continue;
                 }
                 conn.execute(
-                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+                    "INSERT INTO snippets (id, title, body, sort_order, updated_at, created_at, deleted, dirty, group_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)
                      ON CONFLICT(id) DO UPDATE SET
-                       title = ?2, body = ?3, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 1",
+                       title = ?2, body = ?3, group_id = ?8, sort_order = ?4, updated_at = ?5, deleted = ?7, dirty = 1",
                     params![
                         s.id,
                         s.title,
@@ -1658,7 +1716,8 @@ impl Db {
                         s.sort_order,
                         s.updated_at,
                         s.created_at,
-                        s.deleted as i64
+                        s.deleted as i64,
+                        s.group_id
                     ],
                 )
                 .map_err(TermError::Db)?;
@@ -1994,6 +2053,7 @@ mod tests {
 
     fn sample_snippet(id: &str, title: &str, body: &str) -> SnippetRow {
         SnippetRow {
+            group_id: None,
             id: id.into(),
             title: title.into(),
             body: body.into(),
@@ -2003,6 +2063,68 @@ mod tests {
             deleted: false,
             dirty: false,
         }
+    }
+
+    #[test]
+    fn snippet_group_assignment_survives_sync_and_both_backup_modes() {
+        let db = tmp_db();
+        db.snippet_group_save("group-a", "运维").unwrap();
+        db.snippet_group_save("group-empty", "空分组").unwrap();
+        let mut command = sample_snippet("grouped-command", "查看目录", "pwd");
+        command.group_id = Some("group-a".into());
+        db.snippet_save(command).unwrap();
+        let changes = db.sync_export_dirty().unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&changes.iter().find(|x| x.kind == "snippet").unwrap().data).unwrap();
+        assert_eq!(payload["groupId"], "group-a");
+        let remote = tmp_db();
+        remote.sync_apply_pull(&changes).unwrap();
+        assert_eq!(remote.snippet_groups().unwrap().len(), 2);
+        assert_eq!(remote.snippet_list().unwrap()[0].group_id.as_deref(), Some("group-a"));
+        let file = std::env::temp_dir().join(format!("snippet-groups-{}.json", uuid::Uuid::new_v4()));
+        db.backup_export(&file).unwrap();
+        for replace in [true, false] {
+            let restored = tmp_db();
+            restored.backup_import(&file, replace).unwrap();
+            assert_eq!(restored.snippet_groups().unwrap().len(), 2);
+            assert_eq!(restored.snippet_list().unwrap()[0].group_id.as_deref(), Some("group-a"));
+        }
+        std::fs::remove_file(file).unwrap();
+        remote.snippet_group_save("group-a", "服务器").unwrap();
+        assert_eq!(remote.snippet_groups().unwrap()[0].name, "服务器");
+        assert_eq!(remote.snippet_list().unwrap()[0].group_id.as_deref(), Some("group-a"));
+        assert!(remote.snippet_group_save("other", "服务器").is_err());
+        assert!(remote.snippet_group_save("other", "全部").is_err());
+        remote.snippet_group_delete("group-a").unwrap();
+        let commands = remote.snippet_list().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].group_id.is_none());
+        assert_eq!(commands[0].body, "pwd");
+        assert!(commands[0].dirty);
+        assert_eq!(remote.snippet_groups().unwrap()[0].id, "group-empty");
+        assert!(remote.sync_export_dirty().unwrap().iter().any(|x| x.kind == "snippet"));
+    }
+
+    #[test]
+    fn legacy_snippet_database_and_json_default_to_ungrouped() {
+        let file = std::env::temp_dir().join(format!("legacy-snippets-{}.db", uuid::Uuid::new_v4()));
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch("CREATE TABLE snippets (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,sort_order INTEGER NOT NULL,updated_at INTEGER NOT NULL,created_at INTEGER NOT NULL,deleted INTEGER NOT NULL,dirty INTEGER NOT NULL); INSERT INTO snippets VALUES ('legacy','旧命令','echo old',0,1,1,0,1);").unwrap();
+        }
+        let db = Db::open_at(file.clone()).unwrap();
+        let legacy = db.snippet_list().unwrap().remove(0);
+        assert_eq!(legacy.body, "echo old");
+        assert!(legacy.group_id.is_none());
+        let mut json = serde_json::to_value(&legacy).unwrap();
+        json.as_object_mut().unwrap().remove("groupId");
+        assert!(serde_json::from_value::<SnippetRow>(json).unwrap().group_id.is_none());
+        db.snippet_group_save("new-group", "新分组").unwrap();
+        let mut moved = legacy;
+        moved.group_id = Some("new-group".into());
+        db.snippet_save(moved).unwrap();
+        assert_eq!(db.snippet_list().unwrap()[0].group_id.as_deref(), Some("new-group"));
+        drop(db);
+        std::fs::remove_file(file).unwrap();
     }
 
     #[test]
