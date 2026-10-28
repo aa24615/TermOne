@@ -59,7 +59,7 @@ export function TitleBar() {
       <div className="titlebar-tools">
         <button className="titlebar-tool" title={lockEnabled ? "锁屏（Alt+Shift+L）" : "设置锁屏密码"} onClick={() => {
           if (lockEnabled) void lockScreen().catch(e => useStore.getState().showToast(String(e), "error"));
-          else useStore.getState().setDialog({ type: "settings" });
+          else useStore.getState().setDialog({ type: "lock-password", mode: "enable" });
         }}>锁屏</button>
         <button
           className="titlebar-tool"

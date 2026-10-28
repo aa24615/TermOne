@@ -10,6 +10,7 @@ import { matchesShortcut, useRegistry } from "./plugin/registry";
 import { CommandsDialog } from "./components/CommandsDialog";
 import { ProfileDialog } from "./components/ProfileDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { LockPasswordDialog } from "./components/LockPasswordDialog";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
 import { Toasts } from "./components/Toasts";
@@ -51,7 +52,7 @@ export default function App() {
       if (alt && e.shiftKey && (e.code === "KeyL" || k === "l")) {
         e.preventDefault(); e.stopPropagation();
         if (useScreenLock.getState().enabled) void lockScreen().catch(err => s.showToast(String(err), "error"));
-        else s.setDialog({ type: "settings" });
+        else s.setDialog({ type: "lock-password", mode: "enable" });
         return;
       }
       if (alt && e.shiftKey && k === "p") {
@@ -181,6 +182,7 @@ export default function App() {
       )}
       {dialog?.type === "ssh-import" && <Suspense fallback={<Modal title="导入 SSH 配置" onClose={() => useStore.getState().setDialog(null)}>正在加载…</Modal>}><SshImportDialog /></Suspense>}
       {dialog?.type === "settings" && <SettingsDialog />}
+      {dialog?.type === "lock-password" && <LockPasswordDialog key={dialog.mode} mode={dialog.mode} fromSettings={dialog.fromSettings} />}
       {dialog?.type === "account" && <AccountDialog />}
       {dialog?.type === "about" && <AboutDialog />}
       {(dialog?.type === "plugins" || dialog?.type === "applications") && (

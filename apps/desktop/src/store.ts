@@ -54,6 +54,7 @@ export type DialogState =
   | { type: "ssh-import" }
   | { type: "profile"; profileId?: string }
   | { type: "settings" }
+  | { type: "lock-password"; mode: import("./components/LockPasswordDialog").LockPasswordMode; fromSettings?: boolean }
   | { type: "account" }
   | { type: "about" }
   | { type: "plugins" }
