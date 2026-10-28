@@ -160,6 +160,8 @@ pub async fn session_write(
     id: String,
     data_b64: String,
 ) -> CmdResult<()> {
+    let lock = state.screen_lock.lock().map_err(|e| e.to_string())?;
+    if !lock.allows("session_write") { return Err("TermOne 已锁定，请先解锁".into()); }
     let bytes = B64.decode(data_b64.as_bytes()).map_err(|e| e.to_string())?;
     state
         .sessions

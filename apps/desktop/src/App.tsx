@@ -18,6 +18,7 @@ import { PaneView } from "./components/PaneView";
 import { isTauri } from "./env";
 import { allLeaves } from "./paneTree";
 import { useStore } from "./store";
+import { lockScreen, screenIsLocked, useScreenLock } from "./screenLock";
 const SshImportDialog = lazy(
   () => import("./components/SshImportDialog").then(m => ({ default: m.SshImportDialog })),
 );
@@ -42,10 +43,17 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (screenIsLocked()) return;
       const s = useStore.getState();
       const mod = e.ctrlKey || e.metaKey;
       const alt = e.altKey && !mod;
       const k = e.key.toLowerCase();
+      if (alt && e.shiftKey && (e.code === "KeyL" || k === "l")) {
+        e.preventDefault(); e.stopPropagation();
+        if (useScreenLock.getState().enabled) void lockScreen().catch(err => s.showToast(String(err), "error"));
+        else s.setDialog({ type: "settings" });
+        return;
+      }
       if (alt && e.shiftKey && k === "p") {
         e.preventDefault();
         e.stopPropagation();
@@ -133,7 +141,7 @@ export default function App() {
         const hasRunning = st.tabs.some((t) =>
           allLeaves(t.layout).some((p) => p.sessionId),
         );
-        if (st.settings.confirmClose && hasRunning) {
+        if (!screenIsLocked() && st.settings.confirmClose && hasRunning) {
           event.preventDefault();
           setConfirmExit(true);
         }

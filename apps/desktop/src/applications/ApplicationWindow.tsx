@@ -19,6 +19,7 @@ import { Dialogs } from "../components/Dialog";
 import { Toasts } from "../components/Toasts";
 import { useStore } from "../store";
 import { isTauri } from "../env";
+import { lockScreen, screenIsLocked, useScreenLock } from "../screenLock";
 import "../plugin/ui.css";
 
 export default function ApplicationWindow() {
@@ -27,6 +28,7 @@ export default function ApplicationWindow() {
   const contributions = useRegistry((s) => s.items);
   const dialog = useStore((s) => s.dialog);
   const item = usePlugins((s) => s.installed.find((p) => p.id === id));
+  const lockEnabled = useScreenLock(s => s.enabled);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -70,6 +72,12 @@ export default function ApplicationWindow() {
   }, [id]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
+      if (screenIsLocked()) return;
+      if (event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && (event.code === "KeyL" || event.key.toLowerCase() === "l") && useScreenLock.getState().enabled) {
+        event.preventDefault(); event.stopPropagation();
+        void lockScreen().catch(e => useStore.getState().showToast(String(e), "error"));
+        return;
+      }
       for (const item of Object.values(useRegistry.getState().items))
         if (
           item.kind === "command" &&
@@ -95,6 +103,8 @@ export default function ApplicationWindow() {
           <h1>{item?.manifest.name ?? "应用"}</h1>
           <p className="muted">{item?.manifest.description}</p>
         </div>
+        <div className="input-row">
+        {lockEnabled && <button className="btn" title="锁屏（Alt+Shift+L）" onClick={() => void lockScreen().catch(e => useStore.getState().showToast(String(e), "error"))}>锁屏</button>}
         <button
           className="btn"
           onClick={() => {
@@ -103,6 +113,7 @@ export default function ApplicationWindow() {
         >
           关闭窗口
         </button>
+        </div>
       </header>
       <section className="application-content">
         {Object.values(contributions).some((c) => c.kind === "command") && (

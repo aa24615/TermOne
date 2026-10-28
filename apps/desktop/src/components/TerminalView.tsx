@@ -13,6 +13,7 @@ import type { Pane } from "../types";
 import { TerminalInputGuard, RISK_REASONS } from "../terminalInputGuard";
 import { confirm } from "./Dialog";
 import { registerTerminal, registerCommandSender } from "../plugin/terminalBridge";
+import { screenIsLocked } from "../screenLock";
 import { historyRecording, notifyCommand, resolveSubmittedCommand } from "../commandHistory";
 import { activeCommandTarget } from "../plugin/commandActions";
 
@@ -95,6 +96,7 @@ export function TerminalView({
           signal,
         ),
       send: (data) => {
+        if (screenIsLocked()) return false;
         if (panelExecution && (panelSignal?.aborted || activeCommandTarget(useStore.getState())?.sessionId !== sessionId)) {
           useStore.getState().showToast("活动终端或插件状态已变化，命令未发送", "error");
           return false;
@@ -120,7 +122,7 @@ export function TerminalView({
       },
     });
     const removeCommandSender = sessionId ? registerCommandSender(sessionId, async (command, signal) => {
-      if (signal?.aborted) return false;
+      if (signal?.aborted || screenIsLocked()) return false;
       if (!["local", "ssh"].includes(pane.kind) || term.buffer.active.type === "alternate")
         throw new Error("请切换到本地或 SSH 的普通命令行后再执行");
       panelExecution = true;
@@ -140,6 +142,7 @@ export function TerminalView({
     };
     host.addEventListener("paste", onPaste, true);
     const dataDisposer = term.onData((data) => {
+      if (screenIsLocked()) return;
       if (term.hasSelection()) term.clearSelection();
       guard.input(data);
     });

@@ -7,11 +7,13 @@ import { firstLeaf } from "../paneTree";
 import { IconMinus, IconSquare, IconX } from "./icons";
 import { installedKind } from "../plugin/kinds";
 import { openPlugin, usePlugins } from "../plugin/runtime";
+import { lockScreen, useScreenLock } from "../screenLock";
 
 export function TitleBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTabId = useStore((s) => s.activeTabId);
   const plugins = usePlugins((s) => s.installed);
+  const lockEnabled = useScreenLock(s => s.enabled);
   const [isMac, setIsMac] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -55,6 +57,10 @@ export function TitleBar() {
         {title}
       </div>
       <div className="titlebar-tools">
+        <button className="titlebar-tool" title={lockEnabled ? "锁屏（Alt+Shift+L）" : "设置锁屏密码"} onClick={() => {
+          if (lockEnabled) void lockScreen().catch(e => useStore.getState().showToast(String(e), "error"));
+          else useStore.getState().setDialog({ type: "settings" });
+        }}>锁屏</button>
         <button
           className="titlebar-tool"
           onClick={() =>

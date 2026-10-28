@@ -1,5 +1,19 @@
 /* ============ 基础 ============ */
 
+.screen-lock-content { height: 100%; }
+html[data-screen-locked="true"] body > :not(#root) { visibility: hidden !important; }
+.screen-lock-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: grid; place-items: center; background: var(--bg);
+}
+.screen-lock-drag { position: absolute; inset: 0 0 auto; height: 40px; }
+.screen-lock-card { width: min(360px, calc(100vw - 48px)); display: flex; flex-direction: column; gap: 16px; }
+.screen-lock-logo { color: var(--accent); font-size: 40px; font-weight: 700; }
+.screen-lock-card h1 { margin: 0; font-size: 24px; }
+.screen-lock-card p { margin: 0; }
+.screen-lock-card label { font-weight: 600; }
+.screen-lock-card .btn { min-height: 40px; }
+
 * {
   box-sizing: border-box;
 }

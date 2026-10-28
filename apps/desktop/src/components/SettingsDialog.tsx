@@ -8,6 +8,7 @@ import { Dropdown } from "./Dropdown";
 import { useState } from "react";
 import { confirm } from "./Dialog";
 import { validateCustomTheme } from "../themes";
+import { LockSettings } from "./LockSettings";
 
 const DEFAULT_FS = 14;
 const DEFAULT_SB = 5000;
@@ -77,6 +78,7 @@ export function SettingsDialog() {
   return (
     <Modal title="设置" onClose={() => setDialog(null)}>
       <div className="form-grid">
+        <LockSettings />
         <label>主题</label>
         <div className="theme-options">
           {Object.entries(THEME_NAMES).map(([id, name]) => (
