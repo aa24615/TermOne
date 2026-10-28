@@ -1,5 +1,6 @@
 import type { Manifest, Permission } from "./types";
 export const IPC_ALLOW = new Set([
+  "monitor_start", "monitor_poll", "monitor_auth", "monitor_stop",
   "profile_refs",
   "sftp_list",
   "sftp_mkdir",
@@ -36,6 +37,7 @@ export function describePermission(p: Permission): string {
     "global-shortcut": "注册系统全局快捷键",
   };
   if (p.type === "net") return "联网域名：" + p.domain;
+  if (p.type === "ipc" && p.command?.startsWith("monitor_")) return "服务器监控：" + ({ monitor_start: "通过独立 SSH 执行固定只读采集命令", monitor_poll: "读取本机采样结果", monitor_auth: "向监控连接提交临时登录认证", monitor_stop: "停止采集并断开监控连接" }[p.command] ?? p.command);
   if (p.type === "ipc") return "宿主能力：" + p.command;
   return labels[p.type] ?? p.type;
 }

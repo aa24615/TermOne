@@ -8,6 +8,7 @@ import { createHost } from "./hostApi";
 import type { Host, Installed, PluginModule } from "./types";
 
 const modules: Record<string, () => Promise<PluginModule>> = {
+  "com.termone.server-monitor": () => import("../applications/server-monitor"),
   "com.termone.sftp": () => import("../applications/sftp"),
   "com.termone.snippets": () => import("../plugins/snippets"),
   "com.termone.command-history": () => import("../plugins/command-history"),

@@ -355,7 +355,7 @@ pub fn parse_proc_meminfo(text: &str) -> Result<MemInfo> {
             "gb" => 1024 * 1024 * 1024,
             _ => 1,
         };
-        map.insert(key.trim().to_ascii_lowercase(), val * mult);
+        map.insert(key.trim().to_ascii_lowercase(), val.checked_mul(mult).ok_or_else(|| TermError::Other("meminfo value overflow".into()))?);
     }
     let total = map
         .get("memtotal")

@@ -44,6 +44,7 @@ impl Drop for CallGuard {
     }
 }
 const IPC: &[&str] = &[
+    "monitor_start", "monitor_poll", "monitor_auth", "monitor_stop",
     "profile_refs",
     "sftp_list",
     "sftp_mkdir",
@@ -505,7 +506,7 @@ mod tests {
     #[test]
     fn every_bundled_manifest_is_valid_and_does_not_request_secrets() {
         let catalog: Vec<Value> = serde_json::from_str(CATALOG).unwrap();
-        assert_eq!(catalog.len(), 10);
+        assert_eq!(catalog.len(), 11);
         for value in catalog {
             let m = parse(&value).unwrap();
             assert!(!m
@@ -627,6 +628,7 @@ pub async fn plugin_call(
     let v = approved(&app, &id, true)?;
     let m = parse(&v["manifest"])?;
     let allowed = IPC.contains(&command.as_str()) && m.allows_ipc(&command)
+        && (!command.starts_with("monitor_") || crate::monitor::access(&id, v["source"].as_str().unwrap_or(""), m.kind))
         && (!command.starts_with("history_") || history_access(&id, v["source"].as_str().unwrap_or("")));
     audit(&app, &id, &command, allowed);
     if !allowed {
@@ -774,6 +776,12 @@ fn history_access(id: &str, source: &str) -> bool {
     id == "com.termone.command-history" && source == "builtin"
 }
 fn dispatch(app: &AppHandle, id: &str, cmd: &str, args: Value) -> Result<Value> {
+    if cmd.starts_with("monitor_") {
+        let approval = approved(app, id, true)?;
+        let manifest = parse(&approval["manifest"])?;
+        if !crate::monitor::access(id, approval["source"].as_str().unwrap_or(""), manifest.kind) { return Err("监控能力仅对内置服务器监控应用开放".into()); }
+        return crate::monitor::dispatch(app, cmd, args);
+    }
     let state = app.state::<AppState>();
     if cmd.starts_with("history_") {
         let approval = approved(app, id, true)?;

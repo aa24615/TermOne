@@ -1,5 +1,13 @@
 [
   {
+    "id": "com.termone.server-monitor", "name": "服务器资源监控", "version": "0.1.0", "entry": "index.js",
+    "hostApi": { "major": 1, "minor": 1, "patch": 0 }, "kind": "app",
+    "permissions": [ { "type": "ui-panel" }, { "type": "ui-toast" }, { "type": "ipc", "command": "profile_refs" },
+      { "type": "ipc", "command": "monitor_start" }, { "type": "ipc", "command": "monitor_poll" },
+      { "type": "ipc", "command": "monitor_auth" }, { "type": "ipc", "command": "monitor_stop" } ],
+    "description": "独立 SSH 连接查看 Linux CPU、内存、磁盘与网络趋势，数据仅留本机", "author": "TermOne", "files": ["index.js"]
+  },
+  {
     "id": "com.termone.sftp",
     "name": "SFTP 文件管理",
     "version": "0.1.0",

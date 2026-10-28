@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod applications;
+mod monitor;
 mod commands;
 mod imports;
 mod plugins;
@@ -42,6 +43,7 @@ fn main() {
             sessions: SessionManager::new(),
             db,
             screen_lock: Mutex::new(screen_lock),
+            monitor: Mutex::new(monitor::MonitorRegistry::default()),
         })
         .invoke_handler(|invoke| {
             let allowed = invoke.message.webview().state::<state::AppState>().screen_lock
@@ -116,6 +118,9 @@ fn main() {
             handler(invoke)
         })
         .on_window_event(|window, event| {
+            if window.label() == applications::label(monitor::ID) && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Ok(mut registry) = window.state::<state::AppState>().monitor.lock() { registry.stop_all(); }
+            }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<state::AppState>().sessions.close_all();
                 let _ = window.app_handle().global_shortcut().unregister_all();

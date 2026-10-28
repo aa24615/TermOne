@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod metrics;
+pub mod monitor;
 pub mod history;
 pub mod plugin;
 pub mod reconnect;

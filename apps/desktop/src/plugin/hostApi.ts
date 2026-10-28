@@ -12,6 +12,7 @@ import type { Dispose, Host, Installed, Permission } from "./types";
 
 export function createHost(plugin: Installed): Host {
   const controller = new AbortController();
+  let monitorRun: string | null = null;
   const application = installedKind(plugin) === "app";
   const disposals = new Set<Dispose>();
   const own = (dispose: Dispose) => {
@@ -111,16 +112,24 @@ export function createHost(plugin: Installed): Host {
     signal: controller.signal,
     authorize,
     sessions,
-    async invoke<T>(command: string, args = {}) {
+    async invoke<T>(command: string, args: Record<string, unknown> = {}) {
+      if (command.startsWith("monitor_") && (plugin.source !== "builtin" || plugin.id !== "com.termone.server-monitor" || !application))
+        throw new Error("监控能力仅对内置服务器监控应用开放");
       if (command.startsWith("history_") && (plugin.source !== "builtin" || plugin.id !== "com.termone.command-history" || application))
         throw new Error("命令历史仅对内置历史命令插件开放");
       assert({ type: "ipc", command });
       if (!IPC_ALLOW.has(command)) throw new Error("IPC 对插件禁用");
+      if (command === "monitor_start") monitorRun = String(args.runId);
       const result = await invoke<T>("plugin_call", {
         id: plugin.id,
         command,
         args,
       });
+      if (command === "monitor_start" && controller.signal.aborted) {
+        await invoke("plugin_call", { id: plugin.id, command: "monitor_stop", args: { runId: args.runId } }).catch(() => {});
+        throw new Error("监控应用已关闭");
+      }
+      if (command === "monitor_stop" && monitorRun === args.runId) monitorRun = null;
       if (command === "theme_install") {
         await useStore.getState().loadSettings();
         await useStore.getState().saveSetting("theme", "custom");
@@ -270,6 +279,10 @@ export function createHost(plugin: Installed): Host {
     },
     dispose() {
       if (controller.signal.aborted) return;
+      if (monitorRun) {
+        void invoke("plugin_call", { id: plugin.id, command: "monitor_stop", args: { runId: monitorRun } }).catch(() => {});
+        monitorRun = null;
+      }
       controller.abort();
       for (const d of [...disposals].reverse()) {
         try {

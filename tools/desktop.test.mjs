@@ -28,6 +28,31 @@ test("command history cannot be accessed by other plugins or imported packages i
   }
 });
 
+test("server monitoring denies third-party and main-window plugin access", async () => {
+  for (const [id, source, kind] of [["org.example.test", "builtin", "app"], ["com.termone.server-monitor", "local", "app"], ["com.termone.server-monitor", "market", "app"], ["org.example.test", "builtin", "plugin"]]) {
+    const host = createHost({ id, source, enabled: true, manifest: { ...manifest, id, kind, hostApi: { major: 1, minor: 1, patch: 0 }, permissions: [{ type: "ipc", command: "monitor_start" }] } });
+    await assert.rejects(host.invoke("monitor_start", {}), /仅对内置/);
+    host.dispose();
+  }
+});
+
+test("a monitoring application disposed during startup stops the late native connection", async () => {
+  const calls = []; let ready;
+  mockIPC((command, args) => {
+    if (command === "plugin_call") {
+      calls.push(args);
+      if (args.command === "monitor_start") return new Promise(resolve => { ready = resolve; });
+    }
+    return null;
+  });
+  const id = "com.termone.server-monitor";
+  const host = createHost({ id, source: "builtin", enabled: false, manifest: { ...manifest, id, kind: "app", hostApi: { major: 1, minor: 1, patch: 0 }, permissions: [{ type: "ipc", command: "monitor_start" }, { type: "ipc", command: "monitor_stop" }] } });
+  const pending = host.invoke("monitor_start", { runId: "fixture-run", profileId: "fixture-profile", interval: 5 });
+  host.dispose(); ready({ phase: "running" });
+  await assert.rejects(pending, /已关闭/);
+  assert.ok(calls.filter(call => call.command === "monitor_stop" && call.args.runId === "fixture-run").length >= 1);
+});
+
 globalThis.window = globalThis;
 globalThis.localStorage = {
   getItem: () => null,
